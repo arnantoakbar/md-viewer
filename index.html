@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MD Viewer — Flavida</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,700;12..96,800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════
+       LANDING SCREEN (before folder is picked)
+  ══════════════════════════════════════════════ -->
+  <div id="landing" class="landing-screen">
+    <div class="landing-card">
+      <div class="landing-logo">
+        <div class="logo-dot"></div>
+        <span>MD Viewer</span>
+      </div>
+
+      <h1 class="landing-title">Your Markdown,<br><em>beautifully rendered.</em></h1>
+
+      <p class="landing-desc">
+        Browse and edit Markdown files directly from your local filesystem.
+        No uploads, no server — everything stays on your machine.
+      </p>
+
+      <button id="btn-open-folder" class="btn btn-primary btn-lg">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        </svg>
+        Open a Folder
+      </button>
+
+      <p class="landing-note">
+        Your browser will ask for permission to read and write files in the selected folder.
+        Nothing is uploaded or stored outside your device.
+      </p>
+
+      <div id="api-unsupported" class="api-warning hidden">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        Your browser doesn't support the File System Access API. Please use Chrome or Edge 86+.
+      </div>
+    </div>
+
+    <div class="landing-blob landing-blob-1"></div>
+    <div class="landing-blob landing-blob-2"></div>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════
+       APP SHELL (shown after folder is picked)
+  ══════════════════════════════════════════════ -->
+  <div id="app" class="app-shell hidden">
+
+    <!-- HEADER -->
+    <header class="app-header">
+      <div class="header-left">
+        <button id="btn-toggle-panel" class="icon-btn" title="Toggle file panel (Ctrl+B / ⌘B)">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor">
+            <rect x="2" y="2" width="5" height="14" rx="1.5" opacity="0.45"/>
+            <rect x="9" y="2" width="7" height="14" rx="1.5"/>
+          </svg>
+        </button>
+        <div class="header-logo">
+          <div class="logo-dot"></div>
+          <span>MD Viewer</span>
+        </div>
+      </div>
+
+      <div class="header-center">
+        <nav id="breadcrumb" class="breadcrumb" aria-label="Directory path"></nav>
+      </div>
+
+      <div class="header-right">
+        <button id="btn-open-new" class="btn btn-ghost btn-sm">Change Folder</button>
+      </div>
+    </header>
+
+    <!-- MAIN (left panel + resize handle + right panel) -->
+    <main class="app-main">
+
+      <!-- LEFT PANEL -->
+      <aside id="panel-left" class="panel-left">
+        <div class="panel-left-inner">
+
+          <div class="file-panel-toolbar">
+            <button id="btn-up" class="icon-btn icon-btn-panel" title="Go to parent directory" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="18 15 12 9 6 15"/>
+              </svg>
+            </button>
+            <span class="panel-toolbar-label" id="current-dir-name">—</span>
+          </div>
+
+          <div id="file-list" class="file-list" role="list"></div>
+
+          <div id="file-list-empty" class="file-list-empty hidden">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span>No .md files or folders here</span>
+          </div>
+
+        </div>
+      </aside>
+
+      <!-- RESIZE HANDLE -->
+      <div id="resize-handle" class="resize-handle" title="Drag to resize"></div>
+
+      <!-- RIGHT PANEL -->
+      <section id="panel-right" class="panel-right">
+
+        <!-- RIGHT PANEL TOOLBAR -->
+        <div class="preview-toolbar" id="preview-toolbar">
+          <div class="toolbar-left">
+            <span id="file-name-display" class="file-name-display">No file open</span>
+            <span id="dirty-indicator" class="dirty-dot hidden" title="Unsaved changes">●</span>
+          </div>
+
+          <div class="toolbar-center">
+            <div class="view-toggle" role="group" aria-label="View mode">
+              <button id="btn-view-rendered" class="view-toggle-btn active" data-view="rendered">Rendered</button>
+              <button id="btn-view-code" class="view-toggle-btn" data-view="code">Code</button>
+            </div>
+          </div>
+
+          <div class="toolbar-right">
+            <button id="btn-save" class="btn btn-primary btn-sm hidden" title="Save file (Ctrl+S / ⌘S)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+              </svg>
+              Save
+            </button>
+            <button id="btn-fullscreen" class="icon-btn" title="Toggle fullscreen (F11)">
+              <svg id="icon-fullscreen" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+                <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- RENDERED PREVIEW -->
+        <div id="preview-pane" class="preview-pane">
+          <div id="preview-empty" class="preview-empty">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+            <p>Select a Markdown file to preview</p>
+          </div>
+        </div>
+
+        <!-- CODE EDITOR -->
+        <div id="code-pane" class="code-pane hidden">
+          <div id="line-numbers" class="line-numbers" aria-hidden="true"></div>
+          <div class="code-editor-wrap">
+            <!-- Syntax-highlighted layer behind the transparent textarea -->
+            <div id="code-highlight" class="code-highlight" aria-hidden="true"></div>
+            <textarea
+              id="code-editor"
+              class="code-editor"
+              spellcheck="false"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              wrap="off"
+              placeholder="Select a file to edit..."></textarea>
+          </div>
+        </div>
+
+      </section>
+
+    </main>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- CDN Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
