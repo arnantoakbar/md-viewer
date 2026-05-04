@@ -6,13 +6,13 @@ A fully client-side Markdown file viewer and editor. Browse your local folders, 
 
 🌐 **Try it now**: https://flavida.co/md-viewer
 
-![MD Viewer Landing Page](screenshots/landing-page.png)
+![MD Viewer Landing Page](https://github.com/user-attachments/assets/03678d7c-2180-4c13-81e0-e54483900ec9)
 
-![MD Viewer Interface](screenshots/interface.jpg)
+![MD Viewer Interface](https://github.com/user-attachments/assets/772d1a9a-c75a-4a6e-814a-b5bba8d62b0d)
 
-![MD Viewer File Browser](screenshots/file-browser.jpg)
+![MD Viewer File Browser](https://github.com/user-attachments/assets/d66ad5ab-16e1-4e4c-aa59-d4fbc3582261)
 
-![MD Viewer Preview](screenshots/preview.jpg)
+![MD Viewer Preview](https://github.com/user-attachments/assets/508993bd-a4ad-4e2e-8269-6004a6dca75d)
 
 ---
 
