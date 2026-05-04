@@ -2,6 +2,18 @@
 
 A fully client-side Markdown file viewer and editor. Browse your local folders, preview rendered Markdown in real time, edit files, and save changes — all inside the browser with no uploads, no server, and no dependencies to install.
 
+## Live Demo
+
+🌐 **Try it now**: https://flavida.co/md-viewer
+
+![MD Viewer Landing Page](screenshots/landing-page.png)
+
+![MD Viewer Interface](screenshots/interface.jpg)
+
+![MD Viewer File Browser](screenshots/file-browser.jpg)
+
+![MD Viewer Preview](screenshots/preview.jpg)
+
 ---
 
 ## Features
