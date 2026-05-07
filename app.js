@@ -18,6 +18,7 @@ const state = {
   searchActive:      false,
   searchQuery:       '',
   searchGenId:       0,    // incremented on each new search to cancel stale runs
+  searchOpenResult:  null, // the result object last opened from search (path used on exit)
 };
 
 const PREF_KEY = 'mdviewer-prefs';
@@ -898,6 +899,7 @@ async function openFileFromSearch(result, query) {
 
     state.currentFileHandle = result.handle;
     state.isDirty = false;
+    state.searchOpenResult = result; // remember where this file lives for exitSearch()
 
     dom.fileNameDisplay.textContent = result.name;
     dom.dirtyIndicator.classList.add('hidden');
@@ -965,7 +967,7 @@ function _highlightMatches(query) {
   }
 }
 
-function exitSearch() {
+async function exitSearch() {
   state.searchActive = false;
   state.searchQuery  = '';
   state.searchGenId++;          // cancel any in-flight search
@@ -974,16 +976,55 @@ function exitSearch() {
   dom.btnSearchClear.classList.add('hidden');
   dom.searchResults.classList.add('hidden');
 
-  // Restore normal file list
-  dom.fileList.classList.remove('hidden');
-  if (dom.fileList.children.length === 0) {
-    dom.fileListEmpty.classList.remove('hidden');
+  // If a file was opened from search, navigate the directory panel to that
+  // file's location so the left panel matches what's being previewed.
+  const openedResult = state.searchOpenResult;
+  state.searchOpenResult = null;
+
+  if (openedResult && state.rootDirHandle) {
+    await _navigateToDir(openedResult);
+  } else {
+    // No search result was opened — just restore the existing file list view
+    dom.fileList.classList.remove('hidden');
+    if (dom.fileList.children.length === 0) {
+      dom.fileListEmpty.classList.remove('hidden');
+    }
   }
 
   // Re-render current file to strip search highlights
   if (state.currentFileHandle && state.currentView === 'rendered') {
     renderMarkdown(dom.codeEditor.value);
   }
+}
+
+// Traverse from rootDirHandle down through result.path segments,
+// rebuild dirStack, then reload the directory listing and mark the file active.
+async function _navigateToDir(result) {
+  const segments = result.path ? result.path.split('/').filter(Boolean) : [];
+
+  // Reset stack to root
+  state.dirStack        = [{ handle: state.rootDirHandle, name: state.rootDirHandle.name }];
+  state.currentDirHandle = state.rootDirHandle;
+  let handle = state.rootDirHandle;
+
+  for (const seg of segments) {
+    try {
+      const sub = await handle.getDirectoryHandle(seg);
+      state.dirStack.push({ handle: sub, name: seg });
+      state.currentDirHandle = sub;
+      handle = sub;
+    } catch (_) {
+      break; // path segment not found — stop where we are
+    }
+  }
+
+  await loadDirectory(handle);
+
+  // Highlight the active file in the newly loaded list
+  dom.fileList.querySelectorAll('.file-item').forEach(item => {
+    const label = item.querySelector('.file-item-label');
+    if (label?.textContent === result.name) item.classList.add('active');
+  });
 }
 
 
