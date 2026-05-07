@@ -57,6 +57,24 @@ function init() {
     dom.btnOpenFolder.title = 'File System Access API not supported in this browser';
   }
 
+  // Initialise Mermaid with Flavida-themed neutral palette
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'neutral',
+    themeVariables: {
+      primaryColor:       '#FFF0E0',
+      primaryBorderColor: '#E8391D',
+      primaryTextColor:   '#111111',
+      lineColor:          '#E8391D',
+      secondaryColor:     '#FFF8F0',
+      tertiaryColor:      '#FFF8F0',
+      edgeLabelBackground:'#FFF8F0',
+      fontFamily:         'DM Sans, sans-serif',
+    },
+    flowchart:  { curve: 'basis' },
+    securityLevel: 'loose',
+  });
+
   wireEvents();
   initResizeHandle();
   wireKeyboard();
@@ -244,7 +262,7 @@ async function openFile(handle, name, listItemEl) {
     dom.codeEditor.value = content;
     dom.lineNumbers._count = null; // force rebuild on next updateLineNumbers()
 
-    renderMarkdown(content);
+    await renderMarkdown(content);
     setView(state.currentView);
     updateLineNumbers();
     updateCodeHighlight();
@@ -254,7 +272,7 @@ async function openFile(handle, name, listItemEl) {
   }
 }
 
-function renderMarkdown(content) {
+async function renderMarkdown(content) {
   marked.setOptions({
     breaks: true,
     gfm: true,
@@ -275,8 +293,9 @@ function renderMarkdown(content) {
 
   dom.previewPane.innerHTML = safeHtml;
 
-  // Syntax highlight code blocks and stamp language label on <pre>
+  // Syntax highlight non-mermaid code blocks and stamp language label on <pre>
   dom.previewPane.querySelectorAll('pre code').forEach(block => {
+    if (block.classList.contains('language-mermaid')) return; // handled below
     try { hljs.highlightElement(block); } catch (_) {}
     const lang = [...block.classList]
       .find(c => c.startsWith('language-'))
@@ -284,10 +303,35 @@ function renderMarkdown(content) {
     block.closest('pre').dataset.lang = lang;
   });
 
+  // Render Mermaid diagrams
+  await renderMermaidBlocks();
+
   // Stamp each block with its source line so scroll sync can find it
   annotateRenderedBlocks(content);
 
   dom.previewPane.scrollTop = 0;
+}
+
+async function renderMermaidBlocks() {
+  const blocks = dom.previewPane.querySelectorAll('pre code.language-mermaid');
+  let idx = 0;
+  for (const block of blocks) {
+    const definition = block.textContent.trim();
+    const pre = block.closest('pre');
+    try {
+      const id = 'mermaid-' + Date.now() + '-' + (idx++);
+      const { svg } = await mermaid.render(id, definition);
+      const wrapper = document.createElement('div');
+      wrapper.className = 'mermaid-diagram';
+      wrapper.innerHTML = svg;
+      pre.replaceWith(wrapper);
+    } catch (err) {
+      const errDiv = document.createElement('div');
+      errDiv.className = 'mermaid-error';
+      errDiv.textContent = 'Mermaid diagram error: ' + (err.message || err);
+      pre.replaceWith(errDiv);
+    }
+  }
 }
 
 function escapeHtml(str) {
@@ -531,10 +575,8 @@ function setView(view) {
 
   if (state.currentFileHandle) {
     if (isRendered) {
-      // Re-render from textarea so unsaved edits appear live
-      renderMarkdown(dom.codeEditor.value);
-      // Scroll after the browser has laid out the new content
-      requestAnimationFrame(() => scrollPreviewToLine(syncLine));
+      // Re-render from textarea so unsaved edits appear live; scroll after mermaid settles
+      renderMarkdown(dom.codeEditor.value).then(() => scrollPreviewToLine(syncLine));
     } else {
       updateLineNumbers();
       requestAnimationFrame(() => scrollCodeToLine(syncLine));
@@ -579,7 +621,7 @@ async function saveFile() {
     dom.btnSave.classList.add('hidden');
 
     if (state.currentView === 'rendered') {
-      renderMarkdown(content);
+      await renderMarkdown(content);
     }
 
     showToast('File saved', 'success');
