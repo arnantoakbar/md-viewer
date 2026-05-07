@@ -14,6 +14,10 @@ const state = {
   isFullscreen:      false,
   panelWidth:        280,
   isResizing:        false,
+  // Search
+  searchActive:      false,
+  searchQuery:       '',
+  searchGenId:       0,    // incremented on each new search to cancel stale runs
 };
 
 const PREF_KEY = 'mdviewer-prefs';
@@ -36,6 +40,8 @@ function cacheDom() {
     'preview-pane', 'preview-empty', 'code-pane', 'code-editor', 'code-highlight', 'line-numbers',
     'file-name-display', 'dirty-indicator',
     'api-unsupported', 'toast-container',
+    // Search
+    'search-bar', 'search-input', 'btn-search-clear', 'search-results', 'search-status',
   ];
   ids.forEach(id => {
     const key = id.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -708,6 +714,280 @@ function initResizeHandle() {
 
 
 /* ═══════════════════════════════════════════════════════════
+   SEARCH
+═══════════════════════════════════════════════════════════ */
+let _searchTimer = null;
+
+function onSearchInput() {
+  const q = dom.searchInput.value.trim();
+  dom.btnSearchClear.classList.toggle('hidden', q.length === 0);
+
+  clearTimeout(_searchTimer);
+
+  if (!q) {
+    exitSearch();
+    return;
+  }
+
+  // Show "Searching…" immediately so the user gets instant feedback
+  dom.fileList.classList.add('hidden');
+  dom.fileListEmpty.classList.add('hidden');
+  dom.searchResults.classList.remove('hidden');
+  dom.searchStatus.textContent = 'Searching…';
+  dom.searchStatus.className = 'search-status searching';
+  // Clear stale result cards
+  [...dom.searchResults.children]
+    .filter(el => el !== dom.searchStatus)
+    .forEach(el => el.remove());
+
+  _searchTimer = setTimeout(() => performSearch(q), 280);
+}
+
+async function performSearch(query) {
+  if (!state.rootDirHandle) return;
+
+  const gen = ++state.searchGenId;
+  state.searchActive = true;
+  state.searchQuery = query;
+
+  const results = await _searchDir(query.toLowerCase(), state.rootDirHandle, '', gen);
+  if (state.searchGenId !== gen) return; // a newer search superseded this one
+
+  // Remove stale cards before rendering new ones
+  [...dom.searchResults.children]
+    .filter(el => el !== dom.searchStatus)
+    .forEach(el => el.remove());
+
+  if (results.length === 0) {
+    dom.searchStatus.textContent = `No results for "${query}"`;
+    dom.searchStatus.className = 'search-status no-results';
+    return;
+  }
+
+  dom.searchStatus.textContent =
+    `${results.length} file${results.length !== 1 ? 's' : ''} matched`;
+  dom.searchStatus.className = 'search-status has-results';
+
+  const frag = document.createDocumentFragment();
+  results.forEach((result, idx) => {
+    result.idx = idx;
+    frag.appendChild(_createSearchCard(result, query));
+  });
+  dom.searchResults.appendChild(frag);
+}
+
+async function _searchDir(q, dirHandle, pathPrefix, gen) {
+  const results = [];
+  try {
+    for await (const [name, handle] of dirHandle.entries()) {
+      if (state.searchGenId !== gen) return results; // cancelled
+      if (name.startsWith('.')) continue;
+
+      if (handle.kind === 'directory') {
+        const sub = await _searchDir(
+          q, handle,
+          pathPrefix ? `${pathPrefix}/${name}` : name,
+          gen
+        );
+        results.push(...sub);
+      } else if (_isMdFile(name)) {
+        try {
+          const file    = await handle.getFile();
+          const content = await file.text();
+          const snippets = _extractSnippets(content, q);
+          if (snippets.length > 0) {
+            results.push({ handle, name, path: pathPrefix, snippets });
+          }
+        } catch (_) { /* skip unreadable files */ }
+      }
+    }
+  } catch (_) {}
+  return results;
+}
+
+function _isMdFile(name) {
+  const n = name.toLowerCase();
+  return n.endsWith('.md') || n.endsWith('.markdown');
+}
+
+function _extractSnippets(content, q) {
+  const lines = content.split('\n');
+  const snippets = [];
+  for (let i = 0; i < lines.length && snippets.length < 3; i++) {
+    const idx = lines[i].toLowerCase().indexOf(q);
+    if (idx !== -1) {
+      snippets.push({ line: i + 1, text: lines[i], matchStart: idx, matchEnd: idx + q.length });
+    }
+  }
+  return snippets;
+}
+
+function _createSearchCard(result, query) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'search-card';
+  card.setAttribute('role', 'listitem');
+  card.dataset.idx = result.idx;
+
+  // Header: icon + filename
+  const header = document.createElement('div');
+  header.className = 'search-card-header';
+
+  const icon = document.createElement('span');
+  icon.className = 'search-card-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '📄';
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'search-card-name';
+  nameEl.textContent = result.name;
+  nameEl.title = result.name;
+
+  header.append(icon, nameEl);
+  card.appendChild(header);
+
+  // Subfolder path (if nested)
+  if (result.path) {
+    const pathEl = document.createElement('div');
+    pathEl.className = 'search-card-path';
+    pathEl.textContent = result.path;
+    card.appendChild(pathEl);
+  }
+
+  // Up to 2 context snippets
+  result.snippets.slice(0, 2).forEach(snippet => {
+    const s   = document.createElement('div');
+    s.className = 'search-card-snippet';
+
+    const raw         = snippet.text.trim();
+    const lowerRaw    = raw.toLowerCase();
+    const qIdx        = lowerRaw.indexOf(query.toLowerCase());
+
+    if (qIdx === -1) {
+      s.textContent = raw.slice(0, 80);
+    } else {
+      const before = raw.slice(0, qIdx);
+      const match  = raw.slice(qIdx, qIdx + query.length);
+      const after  = raw.slice(qIdx + query.length);
+      const bTrim  = before.length > 40 ? '…' + before.slice(-40) : before;
+      const aTrim  = after.length  > 40 ? after.slice(0, 40) + '…' : after;
+
+      const mark = document.createElement('mark');
+      mark.className = 'search-match';
+      mark.textContent = match;
+      s.append(document.createTextNode(bTrim), mark, document.createTextNode(aTrim));
+    }
+    card.appendChild(s);
+  });
+
+  card.addEventListener('click', () => openFileFromSearch(result, query));
+  return card;
+}
+
+async function openFileFromSearch(result, query) {
+  if (await confirmIfDirty()) return;
+
+  // Highlight active card and scroll it into view within the results panel
+  dom.searchResults.querySelectorAll('.search-card').forEach(c => c.classList.remove('active'));
+  const activeCard = dom.searchResults.querySelector(`[data-idx="${result.idx}"]`);
+  if (activeCard) activeCard.classList.add('active');
+
+  try {
+    const file    = await result.handle.getFile();
+    const content = await file.text();
+
+    state.currentFileHandle = result.handle;
+    state.isDirty = false;
+
+    dom.fileNameDisplay.textContent = result.name;
+    dom.dirtyIndicator.classList.add('hidden');
+    dom.btnSave.classList.add('hidden');
+    dom.codeEditor.value = content;
+    dom.lineNumbers._count = null;
+
+    await renderMarkdown(content);
+    setView('rendered');
+    updateLineNumbers();
+    updateCodeHighlight();
+
+    // Highlight all keyword matches in the rendered view
+    _highlightMatches(query);
+
+  } catch (err) {
+    showToast('Could not open file: ' + err.message, 'error');
+  }
+}
+
+function _highlightMatches(query) {
+  if (!query) return;
+  const q = query.toLowerCase();
+
+  // Walk every text node in the preview pane
+  const walker = document.createTreeWalker(dom.previewPane, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const tag = node.parentElement?.tagName?.toLowerCase();
+      // Skip content inside script/style/existing marks
+      if (tag === 'script' || tag === 'style' || tag === 'mark') {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return node.textContent.toLowerCase().includes(q)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_SKIP;
+    },
+  });
+
+  const textNodes = [];
+  let node;
+  while ((node = walker.nextNode())) textNodes.push(node);
+
+  textNodes.forEach(tn => {
+    const text  = tn.textContent;
+    const lower = text.toLowerCase();
+    const frag  = document.createDocumentFragment();
+    let i = 0;
+    while (i < text.length) {
+      const j = lower.indexOf(q, i);
+      if (j === -1) { frag.appendChild(document.createTextNode(text.slice(i))); break; }
+      if (j > i)      frag.appendChild(document.createTextNode(text.slice(i, j)));
+      const mark = document.createElement('mark');
+      mark.className = 'search-match';
+      mark.textContent = text.slice(j, j + q.length);
+      frag.appendChild(mark);
+      i = j + q.length;
+    }
+    tn.parentNode.replaceChild(frag, tn);
+  });
+
+  // Scroll to first match in the preview pane
+  const first = dom.previewPane.querySelector('mark.search-match');
+  if (first) {
+    requestAnimationFrame(() => first.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+  }
+}
+
+function exitSearch() {
+  state.searchActive = false;
+  state.searchQuery  = '';
+  state.searchGenId++;          // cancel any in-flight search
+
+  dom.searchInput.value = '';
+  dom.btnSearchClear.classList.add('hidden');
+  dom.searchResults.classList.add('hidden');
+
+  // Restore normal file list
+  dom.fileList.classList.remove('hidden');
+  if (dom.fileList.children.length === 0) {
+    dom.fileListEmpty.classList.remove('hidden');
+  }
+
+  // Re-render current file to strip search highlights
+  if (state.currentFileHandle && state.currentView === 'rendered') {
+    renderMarkdown(dom.codeEditor.value);
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════
    BREADCRUMB
 ═══════════════════════════════════════════════════════════ */
 function renderBreadcrumb() {
@@ -823,6 +1103,7 @@ function applyPreferences() {
 function wireKeyboard() {
   document.addEventListener('keydown', e => {
     const meta = e.ctrlKey || e.metaKey;
+    const appVisible = !dom.app.classList.contains('hidden');
 
     // Save: Ctrl/Cmd + S
     if (meta && e.key === 's') {
@@ -831,10 +1112,21 @@ function wireKeyboard() {
       return;
     }
 
+    // Focus search: Ctrl/Cmd + F
+    if (meta && e.key === 'f') {
+      e.preventDefault();
+      if (!appVisible) return;
+      // Expand panel if collapsed so the input is visible
+      if (state.isPanelCollapsed) togglePanel();
+      dom.searchInput.focus();
+      dom.searchInput.select();
+      return;
+    }
+
     // Toggle panel: Ctrl/Cmd + B
     if (meta && e.key === 'b') {
       e.preventDefault();
-      if (dom.app.classList.contains('hidden')) return;
+      if (!appVisible) return;
       togglePanel();
       return;
     }
@@ -842,15 +1134,22 @@ function wireKeyboard() {
     // Fullscreen: F11
     if (e.key === 'F11') {
       e.preventDefault();
-      if (dom.app.classList.contains('hidden')) return;
+      if (!appVisible) return;
       toggleFullscreen();
       return;
     }
 
-    // Exit fullscreen: Escape
-    if (e.key === 'Escape' && state.isFullscreen) {
-      toggleFullscreen();
-      return;
+    // Escape: exit search first, then exit fullscreen
+    if (e.key === 'Escape') {
+      if (state.searchActive) {
+        exitSearch();
+        dom.searchInput.blur();
+        return;
+      }
+      if (state.isFullscreen) {
+        toggleFullscreen();
+        return;
+      }
     }
   });
 }
@@ -875,4 +1174,11 @@ function wireEvents() {
   });
   dom.codeEditor.addEventListener('click',   updateLineNumbers);
   dom.codeEditor.addEventListener('keyup',   updateLineNumbers);
+
+  // Search
+  dom.searchInput.addEventListener('input', onSearchInput);
+  dom.btnSearchClear.addEventListener('click', () => {
+    exitSearch();
+    dom.searchInput.focus();
+  });
 }
