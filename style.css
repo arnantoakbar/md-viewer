@@ -444,6 +444,196 @@ textarea, input { font-family: var(--font-mono); }
 
 
 /* ═══════════════════════════════════════════════════════════
+   SEARCH BAR
+═══════════════════════════════════════════════════════════ */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--color-parchment);
+  position: relative;
+}
+
+.search-bar-icon {
+  flex-shrink: 0;
+  color: var(--color-light);
+  pointer-events: none;
+  transition: color var(--t);
+}
+
+.search-bar:focus-within .search-bar-icon {
+  color: var(--color-flame);
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--color-charcoal);
+  caret-color: var(--color-flame);
+}
+
+.search-input::placeholder {
+  color: var(--color-light);
+  font-size: 12px;
+}
+
+.search-clear-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: rgba(0,0,0,0.08);
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--color-mid);
+  padding: 0;
+  transition: background var(--t), color var(--t);
+}
+.search-clear-btn:hover {
+  background: rgba(232,57,29,0.15);
+  color: var(--color-flame);
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   SEARCH RESULTS
+═══════════════════════════════════════════════════════════ */
+.search-results {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.search-results::-webkit-scrollbar { width: 4px; }
+.search-results::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.search-status {
+  flex-shrink: 0;
+  padding: var(--s2) var(--s3) var(--s1);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-light);
+}
+
+.search-status.searching {
+  color: var(--color-orange);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.search-status.searching::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--color-orange);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.search-status.no-results { color: var(--color-light); }
+.search-status.has-results { color: var(--color-mid); }
+
+/* Result cards */
+.search-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--s3) var(--s4);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t);
+  width: 100%;
+}
+.search-card:hover { background: var(--flame-tint-sm); }
+.search-card:focus-visible {
+  outline: none;
+  background: var(--flame-tint-sm);
+  box-shadow: inset 2px 0 0 var(--color-flame);
+}
+.search-card.active {
+  background: var(--flame-tint-md);
+  box-shadow: inset 2px 0 0 var(--color-flame);
+}
+
+.search-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.search-card-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+  line-height: 1;
+}
+
+.search-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-charcoal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.search-card.active .search-card-name { color: var(--color-flame); }
+
+.search-card-path {
+  font-size: 10px;
+  color: var(--color-light);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 20px; /* align under name */
+}
+
+.search-card-snippet {
+  font-size: 11px;
+  color: var(--color-mid);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 20px;
+}
+
+/* Keyword highlight — rendered preview + result snippet cards */
+mark.search-match {
+  background: #ffd60a;
+  color: #111;
+  border-radius: 2px;
+  padding: 0 2px;
+  font-style: normal;
+}
+
+
+/* ═══════════════════════════════════════════════════════════
    RESIZE HANDLE
 ═══════════════════════════════════════════════════════════ */
 .resize-handle {
