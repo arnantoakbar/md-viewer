@@ -1,0 +1,7 @@
+# Screenshots and recordings (local only)
+*.png
+*.gif
+*.mov
+
+# Claude Code session data
+.claude/
