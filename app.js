@@ -976,6 +976,10 @@ async function exitSearch() {
   dom.btnSearchClear.classList.add('hidden');
   dom.searchResults.classList.add('hidden');
 
+  // Always unhide the file list first — loadDirectory populates it but
+  // doesn't remove the .hidden class that search activation added.
+  dom.fileList.classList.remove('hidden');
+
   // If a file was opened from search, navigate the directory panel to that
   // file's location so the left panel matches what's being previewed.
   const openedResult = state.searchOpenResult;
@@ -984,17 +988,26 @@ async function exitSearch() {
   if (openedResult && state.rootDirHandle) {
     await _navigateToDir(openedResult);
   } else {
-    // No search result was opened — just restore the existing file list view
-    dom.fileList.classList.remove('hidden');
+    // No search result was opened — restore the existing directory view.
+    // loadDirectory was already called when the folder was picked, so just
+    // make sure the empty-state visibility is correct.
     if (dom.fileList.children.length === 0) {
       dom.fileListEmpty.classList.remove('hidden');
     }
   }
 
-  // Re-render current file to strip search highlights
-  if (state.currentFileHandle && state.currentView === 'rendered') {
-    renderMarkdown(dom.codeEditor.value);
-  }
+  // Strip search highlights from the rendered preview WITHOUT re-rendering
+  // (re-rendering would reset scroll position to the top).
+  _removeSearchHighlights();
+}
+
+// Remove <mark class="search-match"> wrappers in-place, preserving scroll position.
+function _removeSearchHighlights() {
+  dom.previewPane.querySelectorAll('mark.search-match').forEach(mark => {
+    mark.replaceWith(document.createTextNode(mark.textContent));
+  });
+  // Merge any split text nodes left behind
+  dom.previewPane.normalize();
 }
 
 // Traverse from rootDirHandle down through result.path segments,
@@ -1003,7 +1016,7 @@ async function _navigateToDir(result) {
   const segments = result.path ? result.path.split('/').filter(Boolean) : [];
 
   // Reset stack to root
-  state.dirStack        = [{ handle: state.rootDirHandle, name: state.rootDirHandle.name }];
+  state.dirStack         = [{ handle: state.rootDirHandle, name: state.rootDirHandle.name }];
   state.currentDirHandle = state.rootDirHandle;
   let handle = state.rootDirHandle;
 
