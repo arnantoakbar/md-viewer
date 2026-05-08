@@ -18,6 +18,13 @@ const state = {
   searchActive:      false,
   searchQuery:       '',
   searchGenId:       0,    // incremented on each new search to cancel stale runs
+  searchOpenResult:  null, // the result object last opened from search (path used on exit)
+  // In-file match navigation
+  matchNav: {
+    active: false,
+    marks:  [],   // all mark.search-match elements in current file
+    index:  0,    // currently focused match (0-based)
+  },
 };
 
 const PREF_KEY = 'mdviewer-prefs';
@@ -42,6 +49,9 @@ function cacheDom() {
     'api-unsupported', 'toast-container',
     // Search
     'search-bar', 'search-input', 'btn-search-clear', 'search-results', 'search-status',
+    // Match navigator
+    'match-nav', 'btn-match-prev', 'btn-match-next', 'btn-match-close',
+    'match-nav-label', 'match-nav-query',
   ];
   ids.forEach(id => {
     const key = id.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -898,6 +908,7 @@ async function openFileFromSearch(result, query) {
 
     state.currentFileHandle = result.handle;
     state.isDirty = false;
+    state.searchOpenResult = result; // remember where this file lives for exitSearch()
 
     dom.fileNameDisplay.textContent = result.name;
     dom.dirtyIndicator.classList.add('hidden');
@@ -910,8 +921,9 @@ async function openFileFromSearch(result, query) {
     updateLineNumbers();
     updateCodeHighlight();
 
-    // Highlight all keyword matches in the rendered view
+    // Highlight all keyword matches then start the match navigator
     _highlightMatches(query);
+    initMatchNav(query);
 
   } catch (err) {
     showToast('Could not open file: ' + err.message, 'error');
@@ -965,7 +977,60 @@ function _highlightMatches(query) {
   }
 }
 
-function exitSearch() {
+/* ── Match navigator ─────────────────────────────────────── */
+
+function initMatchNav(query) {
+  const marks = [...dom.previewPane.querySelectorAll('mark.search-match')];
+  if (marks.length === 0) { closeMatchNav(); return; }
+
+  state.matchNav.active = true;
+  state.matchNav.marks  = marks;
+  state.matchNav.index  = -1; // _goToMatch will set to 0
+
+  dom.matchNavQuery.textContent = `"${query}"`;
+  dom.matchNav.classList.remove('hidden');
+
+  _goToMatch(0);
+}
+
+function _goToMatch(idx) {
+  const { marks } = state.matchNav;
+  if (!marks.length) return;
+
+  // Remove current highlight from previous match
+  marks.forEach(m => m.classList.remove('current'));
+
+  // Wrap around
+  idx = ((idx % marks.length) + marks.length) % marks.length;
+  state.matchNav.index = idx;
+
+  marks[idx].classList.add('current');
+  dom.matchNavLabel.textContent = `${idx + 1} / ${marks.length}`;
+
+  marks[idx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+function matchNavNext() {
+  if (!state.matchNav.active) return;
+  _goToMatch(state.matchNav.index + 1);
+}
+
+function matchNavPrev() {
+  if (!state.matchNav.active) return;
+  _goToMatch(state.matchNav.index - 1);
+}
+
+function closeMatchNav() {
+  state.matchNav.active = false;
+  state.matchNav.marks.forEach(m => m.classList.remove('current'));
+  state.matchNav.marks  = [];
+  state.matchNav.index  = 0;
+  dom.matchNav.classList.add('hidden');
+}
+
+/* ─────────────────────────────────────────────────────────── */
+
+async function exitSearch() {
   state.searchActive = false;
   state.searchQuery  = '';
   state.searchGenId++;          // cancel any in-flight search
@@ -974,16 +1039,69 @@ function exitSearch() {
   dom.btnSearchClear.classList.add('hidden');
   dom.searchResults.classList.add('hidden');
 
-  // Restore normal file list
+  // Always unhide the file list first — loadDirectory populates it but
+  // doesn't remove the .hidden class that search activation added.
   dom.fileList.classList.remove('hidden');
-  if (dom.fileList.children.length === 0) {
-    dom.fileListEmpty.classList.remove('hidden');
+
+  // If a file was opened from search, navigate the directory panel to that
+  // file's location so the left panel matches what's being previewed.
+  const openedResult = state.searchOpenResult;
+  state.searchOpenResult = null;
+
+  if (openedResult && state.rootDirHandle) {
+    await _navigateToDir(openedResult);
+  } else {
+    // No search result was opened — restore the existing directory view.
+    // loadDirectory was already called when the folder was picked, so just
+    // make sure the empty-state visibility is correct.
+    if (dom.fileList.children.length === 0) {
+      dom.fileListEmpty.classList.remove('hidden');
+    }
   }
 
-  // Re-render current file to strip search highlights
-  if (state.currentFileHandle && state.currentView === 'rendered') {
-    renderMarkdown(dom.codeEditor.value);
+  // Strip search highlights from the rendered preview WITHOUT re-rendering
+  // (re-rendering would reset scroll position to the top).
+  _removeSearchHighlights();
+}
+
+// Remove <mark class="search-match"> wrappers in-place, preserving scroll position.
+function _removeSearchHighlights() {
+  closeMatchNav();
+  dom.previewPane.querySelectorAll('mark.search-match').forEach(mark => {
+    mark.replaceWith(document.createTextNode(mark.textContent));
+  });
+  // Merge any split text nodes left behind
+  dom.previewPane.normalize();
+}
+
+// Traverse from rootDirHandle down through result.path segments,
+// rebuild dirStack, then reload the directory listing and mark the file active.
+async function _navigateToDir(result) {
+  const segments = result.path ? result.path.split('/').filter(Boolean) : [];
+
+  // Reset stack to root
+  state.dirStack         = [{ handle: state.rootDirHandle, name: state.rootDirHandle.name }];
+  state.currentDirHandle = state.rootDirHandle;
+  let handle = state.rootDirHandle;
+
+  for (const seg of segments) {
+    try {
+      const sub = await handle.getDirectoryHandle(seg);
+      state.dirStack.push({ handle: sub, name: seg });
+      state.currentDirHandle = sub;
+      handle = sub;
+    } catch (_) {
+      break; // path segment not found — stop where we are
+    }
   }
+
+  await loadDirectory(handle);
+
+  // Highlight the active file in the newly loaded list
+  dom.fileList.querySelectorAll('.file-item').forEach(item => {
+    const label = item.querySelector('.file-item-label');
+    if (label?.textContent === result.name) item.classList.add('active');
+  });
 }
 
 
@@ -1123,6 +1241,25 @@ function wireKeyboard() {
       return;
     }
 
+    // Match navigation (only when nav bar is active and focus is not in the editor)
+    if (state.matchNav.active && document.activeElement !== dom.codeEditor) {
+      // Enter / Shift+Enter — next / prev match
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.shiftKey ? matchNavPrev() : matchNavNext();
+        return;
+      }
+      // Arrow keys — next / prev (only when search input is NOT focused, to keep typing free)
+      if (document.activeElement !== dom.searchInput) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+          e.preventDefault(); matchNavNext(); return;
+        }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+          e.preventDefault(); matchNavPrev(); return;
+        }
+      }
+    }
+
     // Toggle panel: Ctrl/Cmd + B
     if (meta && e.key === 'b') {
       e.preventDefault();
@@ -1139,8 +1276,12 @@ function wireKeyboard() {
       return;
     }
 
-    // Escape: exit search first, then exit fullscreen
+    // Escape: close match nav → exit search → exit fullscreen (priority order)
     if (e.key === 'Escape') {
+      if (state.matchNav.active && !state.searchActive) {
+        closeMatchNav();
+        return;
+      }
       if (state.searchActive) {
         exitSearch();
         dom.searchInput.blur();
@@ -1181,4 +1322,9 @@ function wireEvents() {
     exitSearch();
     dom.searchInput.focus();
   });
+
+  // Match navigator
+  dom.btnMatchPrev.addEventListener('click', matchNavPrev);
+  dom.btnMatchNext.addEventListener('click', matchNavNext);
+  dom.btnMatchClose.addEventListener('click', closeMatchNav);
 }
