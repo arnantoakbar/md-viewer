@@ -20,6 +20,9 @@ A fully client-side Markdown file viewer and editor. Browse your local folders, 
 
 - **Folder browser** — Pick any local folder and navigate its contents like a file manager. Only Markdown files (`.md`, `.markdown`) and sub-folders are shown, so the tree stays clean.
 - **Real-time preview** — Selecting a file instantly renders it as formatted HTML with syntax-highlighted code blocks.
+- **Mermaid diagrams** — Fenced ` ```mermaid ` blocks render as live SVG diagrams (flowcharts, sequence diagrams, Gantt charts, and more) themed with the Flavida palette.
+- **Full-text search** — Press `Ctrl+F` / `⌘F` to search across every `.md` file in the selected folder. Results show the file name and a matching snippet. Select a result to open the file with all matches highlighted.
+- **In-file match navigator** — When a file is opened from search, a navigator bar shows the total match count and lets you step between every occurrence with `↑` / `↓` buttons or keyboard shortcuts. The current match is highlighted in orange; all others in yellow.
 - **Code / Rendered toggle** — Switch between the rendered view and the raw Markdown source at any time. Edits in the source view are reflected immediately when you switch back to rendered.
 - **Edit & save** — The Save button appears only when unsaved changes are detected. Press `Ctrl+S` / `⌘S` or click Save to write back to disk.
 - **Collapsible sidebar** — Hide the file browser to focus on reading or writing. Toggle with the panel button or `Ctrl+B` / `⌘B`.
@@ -77,8 +80,12 @@ Then open `http://localhost:8080` in your browser.
 |----------|--------|
 | `Ctrl+S` / `⌘S` | Save the current file |
 | `Ctrl+B` / `⌘B` | Toggle the file browser sidebar |
+| `Ctrl+F` / `⌘F` | Focus the search bar |
+| `Enter` | Next match (when match navigator is active) |
+| `Shift+Enter` | Previous match (when match navigator is active) |
+| `↓` / `↑` | Next / previous match (when navigator is active and focus is outside editor) |
+| `Esc` | Close match navigator → clear search → exit fullscreen (in priority order) |
 | `F11` | Toggle fullscreen preview |
-| `Esc` | Exit fullscreen |
 
 ---
 
@@ -99,14 +106,15 @@ No build step, no `package.json`, no bundler. Everything runs directly in the br
 
 ## Dependencies (CDN, no install)
 
-All loaded from cdnjs — no local copies needed:
+All loaded from CDN — no local copies needed:
 
-| Library | Version | Purpose |
-|---------|---------|---------|
-| [marked](https://marked.js.org) | 9.1.6 | Markdown → HTML parsing |
-| [DOMPurify](https://github.com/cure53/DOMPurify) | 3.0.8 | Sanitize rendered HTML |
-| [highlight.js](https://highlightjs.org) | 11.9.0 | Syntax highlighting in code blocks |
-| [Google Fonts](https://fonts.google.com) | — | Bricolage Grotesque + DM Sans |
+| Library | Version | CDN | Purpose |
+|---------|---------|-----|---------|
+| [marked](https://marked.js.org) | 9.1.6 | cdnjs | Markdown → HTML parsing |
+| [DOMPurify](https://github.com/cure53/DOMPurify) | 3.0.8 | cdnjs | Sanitize rendered HTML |
+| [highlight.js](https://highlightjs.org) | 11.9.0 | cdnjs | Syntax highlighting in code blocks |
+| [Mermaid](https://mermaid.js.org) | 10 | jsDelivr | Diagram rendering (flowcharts, sequence, Gantt, etc.) |
+| [Google Fonts](https://fonts.google.com) | — | Google | Bricolage Grotesque + DM Sans |
 
 The app will work offline if your browser has cached these resources from a previous visit. For fully offline use, download the libraries and reference them locally in `index.html`.
 
@@ -127,6 +135,18 @@ The sidebar works like macOS Finder or Windows Explorer in list view:
 - Click a **folder** to navigate into it.
 - Click the **↑ Up** button or a breadcrumb segment to go back to a parent directory.
 - Only `.md` / `.markdown` files and folders are listed — other file types are hidden.
+
+### Search
+
+Press `Ctrl+F` / `⌘F` to open the search bar in the left panel. As you type, the app reads every `.md` file in the selected folder (recursively) and returns matching files ranked by hit count. Each result card shows the file name and a text snippet around the first match.
+
+Clicking a result opens the file and:
+
+1. Highlights every occurrence of the query with a yellow `<mark>`.
+2. Shows a **match navigator bar** below the preview toolbar with the total count and prev/next controls.
+3. Scrolls to and focuses the first match (orange highlight).
+
+Use `Enter` / `Shift+Enter` or the `↑` / `↓` arrow keys to step through matches. The navigator bar closes when you clear the search or press `Esc`. Clearing the search returns the left panel to the directory where the opened file lives, and the preview scroll position is preserved.
 
 ### Saving files
 
