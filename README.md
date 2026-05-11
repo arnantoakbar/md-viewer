@@ -24,6 +24,9 @@ A fully client-side Markdown file viewer and editor. Browse your local folders, 
 - **Full-text search** — Press `Ctrl+F` / `⌘F` to search across every `.md` file in the selected folder. Results show the file name and a matching snippet. Select a result to open the file with all matches highlighted.
 - **In-file match navigator** — When a file is opened from search, a navigator bar shows the total match count and lets you step between every occurrence with `↑` / `↓` buttons or keyboard shortcuts. The current match is highlighted in orange; all others in yellow.
 - **Code / Rendered toggle** — Switch between the rendered view and the raw Markdown source at any time. Edits in the source view are reflected immediately when you switch back to rendered.
+- **Create new file** — Click the `+` button in the sidebar toolbar to create a new `.md` file in the current folder. The file is created instantly and enters rename mode so you can set a real name before writing.
+- **Duplicate file** — Click the duplicate icon in the preview toolbar (visible when a file is open) to copy the current file. The duplicate is named automatically (`title (2).md`, `title (3).md`, etc.) and opened immediately.
+- **Inline rename** — Double-click any filename in the sidebar or in the toolbar to rename it in place. Press `Enter` or click outside to save; press `Esc` to cancel. Works like macOS Finder / Windows Explorer.
 - **Edit & save** — The Save button appears only when unsaved changes are detected. Press `Ctrl+S` / `⌘S` or click Save to write back to disk.
 - **Collapsible sidebar** — Hide the file browser to focus on reading or writing. Toggle with the panel button or `Ctrl+B` / `⌘B`.
 - **Fullscreen preview** — Expand the preview to fill the entire window with `F11`. Press `Esc` to exit.

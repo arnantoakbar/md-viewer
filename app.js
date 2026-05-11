@@ -40,6 +40,7 @@ function cacheDom() {
     'landing', 'app',
     'btn-open-folder', 'btn-open-new', 'btn-toggle-panel',
     'btn-up', 'btn-view-rendered', 'btn-view-code',
+    'btn-new-file', 'btn-duplicate',
     'btn-save', 'btn-fullscreen', 'icon-fullscreen',
     'panel-left', 'resize-handle', 'panel-right',
     'file-list', 'file-list-empty', 'current-dir-name',
@@ -209,6 +210,14 @@ function createFileItem(name, handle) {
     }
   });
 
+  // Double-click on a file item → inline rename (Finder / Explorer behaviour)
+  if (handle.kind === 'file') {
+    el.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      startRename(handle, state.currentDirHandle, el, name);
+    });
+  }
+
   return el;
 }
 
@@ -246,12 +255,246 @@ function clearActiveFile() {
   state.currentFileHandle = null;
   state.isDirty = false;
   dom.fileNameDisplay.textContent = 'No file open';
+  delete dom.fileNameDisplay.dataset.renameable;
   dom.dirtyIndicator.classList.add('hidden');
   dom.btnSave.classList.add('hidden');
+  dom.btnDuplicate.classList.add('hidden');
   dom.previewEmpty.classList.remove('hidden');
   dom.previewPane.innerHTML = '';
   dom.previewPane.appendChild(dom.previewEmpty);
   dom.codeEditor.value = '';
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   FILE MANAGEMENT — CREATE / DUPLICATE / RENAME
+═══════════════════════════════════════════════════════════ */
+
+// Split "my notes (2).md" → { base: "my notes", ext: ".md" }
+function _splitName(fullName) {
+  const dot = fullName.lastIndexOf('.');
+  if (dot <= 0) return { base: fullName, ext: '' };
+  return { base: fullName.slice(0, dot), ext: fullName.slice(dot) };
+}
+
+// Return the first unused name: try base+ext, then "base (2)+ext", etc.
+async function _getAvailableName(dirHandle, base, ext) {
+  const existing = new Set();
+  try {
+    for await (const [name] of dirHandle.entries()) existing.add(name.toLowerCase());
+  } catch (_) {}
+  if (!existing.has((base + ext).toLowerCase())) return base + ext;
+  let i = 2;
+  while (existing.has(`${base} (${i})${ext}`.toLowerCase())) i++;
+  return `${base} (${i})${ext}`;
+}
+
+async function createNewFile() {
+  if (!state.currentDirHandle) return;
+  const name = await _getAvailableName(state.currentDirHandle, 'untitled', '.md');
+  try {
+    const handle = await state.currentDirHandle.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write('');
+    await writable.close();
+
+    await loadDirectory(state.currentDirHandle);
+
+    // Find and activate the new item, then start rename immediately
+    const item = [...dom.fileList.querySelectorAll('.file-item')]
+      .find(el => el.querySelector('.file-item-label')?.textContent === name);
+    if (item) {
+      // Mark active + update state so toolbar rename works
+      dom.fileList.querySelectorAll('.file-item').forEach(e => e.classList.remove('active'));
+      item.classList.add('active');
+      state.currentFileHandle = handle;
+      state.isDirty = false;
+      dom.fileNameDisplay.textContent = name;
+      dom.fileNameDisplay.dataset.renameable = '1';
+      dom.dirtyIndicator.classList.add('hidden');
+      dom.btnSave.classList.add('hidden');
+      dom.btnDuplicate.classList.remove('hidden');
+      dom.codeEditor.value = '';
+      await renderMarkdown('');
+      setView('code'); // go straight to code view so user can start writing
+      updateLineNumbers();
+      updateCodeHighlight();
+      // Start rename right away so user can set a real name
+      startRename(handle, state.currentDirHandle, item, name);
+    }
+  } catch (err) {
+    showToast('Could not create file: ' + err.message, 'error');
+  }
+}
+
+async function duplicateFile() {
+  if (!state.currentFileHandle || !state.currentDirHandle) return;
+  const origName = dom.fileNameDisplay.textContent;
+  const { base, ext } = _splitName(origName);
+  // Strip any existing counter before generating the new name
+  const cleanBase = base.replace(/ \(\d+\)$/, '');
+  const newName = await _getAvailableName(state.currentDirHandle, cleanBase, ext);
+
+  try {
+    const content = dom.codeEditor.value; // use live editor content
+    const handle  = await state.currentDirHandle.getFileHandle(newName, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(content);
+    await writable.close();
+
+    showToast(`Duplicated as "${newName}"`, 'success');
+    await loadDirectory(state.currentDirHandle);
+
+    const item = [...dom.fileList.querySelectorAll('.file-item')]
+      .find(el => el.querySelector('.file-item-label')?.textContent === newName);
+    if (item) openFile(handle, newName, item);
+  } catch (err) {
+    showToast('Could not duplicate: ' + err.message, 'error');
+  }
+}
+
+// ── Inline rename ─────────────────────────────────────────
+
+// Start inline rename on a left-panel file item.
+function startRename(handle, dirHandle, listItemEl, currentName) {
+  // Don't start a second rename if one is already in progress
+  if (listItemEl.querySelector('.file-item-rename')) return;
+  const { base, ext } = _splitName(currentName);
+  const label = listItemEl.querySelector('.file-item-label');
+  if (!label) return;
+
+  let committed = false;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'file-item-rename';
+  input.value = base;
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const commit = async () => {
+    if (committed) return;
+    committed = true;
+    const newBase = input.value.trim();
+    const newName = (newBase || base) + ext;
+    input.replaceWith(label);
+    label.textContent = currentName; // restore temporarily; _commitRename reloads
+    if (newName !== currentName) {
+      await _commitRename(handle, dirHandle, currentName, newName);
+    }
+  };
+  const cancel = () => {
+    if (committed) return;
+    committed = true;
+    input.replaceWith(label);
+    label.textContent = currentName;
+  };
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    e.stopPropagation(); // block app shortcuts while typing
+  });
+  input.addEventListener('blur', commit);
+}
+
+// Start inline rename from the toolbar filename.
+function startToolbarRename() {
+  if (!state.currentFileHandle || !state.currentDirHandle) return;
+  const currentName = dom.fileNameDisplay.textContent;
+  if (!currentName || currentName === 'No file open') return;
+  // Don't start if already renaming
+  if (dom.fileNameDisplay.parentElement.querySelector('.file-name-rename')) return;
+
+  const { base, ext } = _splitName(currentName);
+  let committed = false;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'file-name-rename';
+  input.value = base;
+  dom.fileNameDisplay.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const commit = async () => {
+    if (committed) return;
+    committed = true;
+    const newBase = input.value.trim();
+    const newName = (newBase || base) + ext;
+    input.replaceWith(dom.fileNameDisplay);
+    dom.fileNameDisplay.textContent = currentName; // restore temporarily
+    if (newName !== currentName) {
+      await _commitRename(state.currentFileHandle, state.currentDirHandle, currentName, newName);
+    }
+  };
+  const cancel = () => {
+    if (committed) return;
+    committed = true;
+    input.replaceWith(dom.fileNameDisplay);
+    dom.fileNameDisplay.textContent = currentName;
+  };
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', commit);
+}
+
+// Rename a file: create with new name, copy content, remove old file.
+async function _commitRename(handle, dirHandle, oldName, newName) {
+  if (!newName || /[/\\]/.test(newName)) {
+    showToast('Invalid file name', 'error');
+    await loadDirectory(dirHandle);
+    return;
+  }
+  if (newName === oldName) return;
+
+  // Check for collision
+  try {
+    await dirHandle.getFileHandle(newName);
+    showToast(`"${newName}" already exists`, 'warning');
+    await loadDirectory(dirHandle);
+    return;
+  } catch (_) { /* name is available */ }
+
+  try {
+    // Use live editor content if this is the currently open file
+    const isOpen = state.currentFileHandle &&
+                   dom.fileNameDisplay.textContent === oldName;
+    const content = isOpen
+      ? dom.codeEditor.value
+      : await (await handle.getFile()).text();
+
+    // Write new file
+    const newHandle = await dirHandle.getFileHandle(newName, { create: true });
+    const writable  = await newHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+
+    // Delete old file
+    await dirHandle.removeEntry(oldName);
+
+    // Update state if the renamed file is currently open
+    if (isOpen) {
+      state.currentFileHandle = newHandle;
+      dom.fileNameDisplay.textContent = newName;
+    }
+
+    showToast(`Renamed to "${newName}"`, 'success');
+    await loadDirectory(dirHandle);
+
+    // Re-mark the renamed item as active
+    const item = [...dom.fileList.querySelectorAll('.file-item')]
+      .find(el => el.querySelector('.file-item-label')?.textContent === newName);
+    if (item) item.classList.add('active');
+
+  } catch (err) {
+    showToast('Rename failed: ' + err.message, 'error');
+    await loadDirectory(dirHandle);
+  }
 }
 
 
@@ -273,8 +516,10 @@ async function openFile(handle, name, listItemEl) {
     state.isDirty = false;
 
     dom.fileNameDisplay.textContent = name;
+    dom.fileNameDisplay.dataset.renameable = '1';
     dom.dirtyIndicator.classList.add('hidden');
     dom.btnSave.classList.add('hidden');
+    dom.btnDuplicate.classList.remove('hidden');
     dom.codeEditor.value = content;
     dom.lineNumbers._count = null; // force rebuild on next updateLineNumbers()
 
@@ -1304,10 +1549,15 @@ function wireEvents() {
   dom.btnOpenNew.addEventListener('click', openFolder);
   dom.btnTogglePanel.addEventListener('click', togglePanel);
   dom.btnUp.addEventListener('click', goUp);
+  dom.btnNewFile.addEventListener('click', createNewFile);
+  dom.btnDuplicate.addEventListener('click', duplicateFile);
   dom.btnViewRendered.addEventListener('click', () => setView('rendered'));
   dom.btnViewCode.addEventListener('click', () => setView('code'));
   dom.btnSave.addEventListener('click', saveFile);
   dom.btnFullscreen.addEventListener('click', toggleFullscreen);
+
+  // Double-click toolbar filename → rename
+  dom.fileNameDisplay.addEventListener('dblclick', startToolbarRename);
   dom.codeEditor.addEventListener('input',   onEditorInput);
   dom.codeEditor.addEventListener('scroll',  () => {
     dom.lineNumbers.scrollTop = dom.codeEditor.scrollTop;
