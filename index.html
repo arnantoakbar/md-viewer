@@ -112,6 +112,11 @@
               </svg>
             </button>
             <span class="panel-toolbar-label" id="current-dir-name">—</span>
+            <button id="btn-new-file" class="icon-btn icon-btn-panel" title="New file in current folder">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+            </button>
           </div>
 
           <!-- SEARCH BAR -->
@@ -155,7 +160,7 @@
         <!-- RIGHT PANEL TOOLBAR -->
         <div class="preview-toolbar" id="preview-toolbar">
           <div class="toolbar-left">
-            <span id="file-name-display" class="file-name-display">No file open</span>
+            <span id="file-name-display" class="file-name-display" title="Double-click to rename">No file open</span>
             <span id="dirty-indicator" class="dirty-dot hidden" title="Unsaved changes">●</span>
           </div>
 
@@ -167,6 +172,12 @@
           </div>
 
           <div class="toolbar-right">
+            <button id="btn-duplicate" class="icon-btn hidden" title="Duplicate file">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+            </button>
             <button id="btn-save" class="btn btn-primary btn-sm hidden" title="Save file (Ctrl+S / ⌘S)">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>

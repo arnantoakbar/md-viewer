@@ -426,6 +426,23 @@ textarea, input { font-family: var(--font-mono); }
   flex: 1;
 }
 
+/* Inline rename input — left panel */
+.file-item-rename {
+  flex: 1;
+  font-size: 13px;
+  font-family: var(--font-body);
+  font-weight: 400;
+  color: var(--color-charcoal);
+  background: white;
+  border: 1.5px solid var(--color-flame);
+  border-radius: var(--radius-xs);
+  padding: 0 5px;
+  outline: none;
+  min-width: 0;
+  height: 22px;
+  box-shadow: 0 0 0 3px rgba(232,57,29,0.12);
+}
+
 .file-item[data-kind="directory"] {
   font-weight: 500;
 }
@@ -821,6 +838,31 @@ mark.search-match.current {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 200px;
+  border-radius: var(--radius-xs);
+  padding: 1px 3px;
+  margin: -1px -3px;
+  transition: background var(--t);
+}
+.file-name-display[data-renameable]:hover {
+  background: rgba(255,255,255,0.1);
+  cursor: text;
+}
+
+/* Inline rename input — toolbar */
+.file-name-rename {
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-body);
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.12);
+  border: 1.5px solid rgba(255,255,255,0.45);
+  border-radius: var(--radius-xs);
+  padding: 0 6px;
+  outline: none;
+  height: 24px;
+  min-width: 80px;
+  max-width: 200px;
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.08);
 }
 
 .dirty-dot {
