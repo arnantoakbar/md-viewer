@@ -1,6 +1,10 @@
+![MD Viewer Landing Page](https://ph-files.imgix.net/8a7ea7fe-8426-44b5-b916-3cb00726bb58.png?auto=compress&codec=mozjpeg&cs=strip&auto=format&w=128&h=128&fit=crop&frame=1&dpr=1)
+
 # MD Viewer
 
 A fully client-side Markdown file viewer and editor. Browse your local folders, preview rendered Markdown in real time, edit files, and save changes — all inside the browser with no uploads, no server, and no dependencies to install.
+
+<a href="https://www.producthunt.com/products/md-viewer-2?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-md-viewer-2" target="_blank" rel="noopener noreferrer"><img alt="md-viewer - A fully client-side Markdown file viewer and editor | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1144992&amp;theme=dark&amp;t=1778573254931"></a>
 
 ## Live Demo
 
