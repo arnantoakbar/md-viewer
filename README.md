@@ -1,4 +1,5 @@
-![MD Viewer Landing Page](https://ph-files.imgix.net/8a7ea7fe-8426-44b5-b916-3cb00726bb58.png?auto=compress&codec=mozjpeg&cs=strip&auto=format&w=128&h=128&fit=crop&frame=1&dpr=1)
+<div align="center">
+<img src="https://ph-files.imgix.net/8a7ea7fe-8426-44b5-b916-3cb00726bb58.png?auto=compress&codec=mozjpeg&cs=strip&auto=format&w=128&h=128&fit=crop&frame=1&dpr=1">
 
 # MD Viewer
 
@@ -9,6 +10,7 @@ A fully client-side Markdown file viewer and editor. Browse your local folders, 
 ## Live Demo
 
 🌐 **Try it now**: https://flavida.co/md-viewer
+</div>
 
 ![MD Viewer Landing Page](https://github.com/user-attachments/assets/03678d7c-2180-4c13-81e0-e54483900ec9)
 
