@@ -451,6 +451,14 @@ textarea, input { font-family: var(--font-mono); }
 }
 
 /* ── Drag and drop ─────────────────────────────────────── */
+/* Up button lights up when dragging an item over it (move to parent dir) */
+.icon-btn-panel.drag-over {
+  background: rgba(245, 166, 35, 0.2);
+  color: var(--color-amber) !important;
+  box-shadow: 0 0 0 1.5px var(--color-amber);
+}
+
+
 .file-item.dragging {
   opacity: 0.35;
   cursor: grabbing;
@@ -1123,11 +1131,6 @@ mark.search-match.current {
   cursor: default;
   pointer-events: none;
 }
-.breadcrumb-segment.bc-drag-over {
-  color: var(--color-amber) !important;
-  background: rgba(245, 166, 35, 0.18) !important;
-}
-
 .breadcrumb-separator {
   color: rgba(255,255,255,0.22);
   font-size: 11px;

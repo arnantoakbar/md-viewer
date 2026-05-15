@@ -1700,26 +1700,6 @@ function renderBreadcrumb() {
       seg.addEventListener('click', () => navigateToBreadcrumb(index));
     }
 
-    // ── Breadcrumb drop target (drag item to any parent dir, including root) ──
-    seg.addEventListener('dragover', e => {
-      if (!_dragState) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      seg.classList.add('bc-drag-over');
-    });
-    seg.addEventListener('dragleave', e => {
-      if (!seg.contains(e.relatedTarget)) seg.classList.remove('bc-drag-over');
-    });
-    seg.addEventListener('drop', e => {
-      e.preventDefault();
-      seg.classList.remove('bc-drag-over');
-      if (!_dragState) return;
-      const { handle: dirHandle, name: dirName } = state.dirStack[index];
-      const ds = _dragState;
-      _dragState = null;
-      requestMoveEntry(ds, dirHandle, dirName);
-    });
-
     dom.breadcrumb.appendChild(seg);
   });
 }
@@ -1939,6 +1919,26 @@ function wireEvents() {
   dom.btnOpenNew.addEventListener('click', openFolder);
   dom.btnTogglePanel.addEventListener('click', togglePanel);
   dom.btnUp.addEventListener('click', goUp);
+
+  // ↑ Up button as drag-drop target — drop moves item to the parent directory
+  dom.btnUp.addEventListener('dragover', e => {
+    if (!_dragState || state.dirStack.length <= 1) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dom.btnUp.classList.add('drag-over');
+  });
+  dom.btnUp.addEventListener('dragleave', e => {
+    if (!dom.btnUp.contains(e.relatedTarget)) dom.btnUp.classList.remove('drag-over');
+  });
+  dom.btnUp.addEventListener('drop', e => {
+    e.preventDefault();
+    dom.btnUp.classList.remove('drag-over');
+    if (!_dragState || state.dirStack.length <= 1) return;
+    const parent = state.dirStack[state.dirStack.length - 2];
+    const ds = _dragState;
+    _dragState = null;
+    requestMoveEntry(ds, parent.handle, parent.name);
+  });
   dom.btnNewFile.addEventListener('click', createNewFile);
   dom.btnDuplicate.addEventListener('click', duplicateFile);
   dom.btnViewRendered.addEventListener('click', () => setView('rendered'));
