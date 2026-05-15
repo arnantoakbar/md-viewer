@@ -29,8 +29,12 @@ const state = {
 
 const PREF_KEY = 'mdviewer-prefs';
 
-// Tracks the file pending soft-delete (during the 5 s undo window)
+// Tracks the file pending soft-delete (during the 3 s undo window)
 let _pendingDelete = null; // { name, handle, dirHandle, listItemEl, timer }
+
+// Drag-and-drop state
+let _dragState   = null; // { handle, name, kind, srcDirHandle, listItemEl }
+let _pendingMove = null; // { handle, name, kind, srcDirHandle, destDirHandle, destDirName, listItemEl, timer }
 
 
 /* ═══════════════════════════════════════════════════════════
@@ -53,6 +57,7 @@ function cacheDom() {
     'api-unsupported', 'toast-container',
     'delete-modal', 'delete-modal-filename', 'btn-delete-cancel', 'btn-delete-confirm',
     'btn-help', 'shortcuts-modal', 'btn-shortcuts-close',
+    'move-modal', 'move-modal-source', 'move-modal-dest', 'btn-move-cancel', 'btn-move-confirm',
     // Search
     'search-bar', 'search-input', 'btn-search-clear', 'search-results', 'search-status',
     // Match navigator
@@ -72,6 +77,7 @@ function cacheDom() {
 function init() {
   cacheDom();
   loadPreferences();
+  _applyOsShortcutLabels();
 
   if (!('showDirectoryPicker' in window)) {
     dom.apiUnsupported.classList.remove('hidden');
@@ -239,6 +245,43 @@ function createFileItem(name, handle) {
     el.addEventListener('dblclick', e => {
       e.stopPropagation();
       startRename(handle, state.currentDirHandle, el, name);
+    });
+  }
+
+  // ── Drag and drop ───────────────────────────────────────
+  el.draggable = true;
+
+  el.addEventListener('dragstart', e => {
+    _dragState = { handle, name, kind: handle.kind, srcDirHandle: state.currentDirHandle, listItemEl: el };
+    requestAnimationFrame(() => el.classList.add('dragging'));
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', name); // required for Firefox
+  });
+
+  el.addEventListener('dragend', () => {
+    el.classList.remove('dragging');
+    dom.fileList.querySelectorAll('.drag-over').forEach(t => t.classList.remove('drag-over'));
+    _dragState = null;
+  });
+
+  // Folder items are drop targets
+  if (handle.kind === 'directory') {
+    el.addEventListener('dragover', e => {
+      if (!_dragState || _dragState.name === name) return; // can't drop onto itself
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      el.classList.add('drag-over');
+    });
+    el.addEventListener('dragleave', e => {
+      if (!el.contains(e.relatedTarget)) el.classList.remove('drag-over');
+    });
+    el.addEventListener('drop', e => {
+      e.preventDefault();
+      el.classList.remove('drag-over');
+      if (!_dragState || _dragState.name === name) return;
+      const ds = _dragState;
+      _dragState = null;
+      requestMoveEntry(ds, handle, name);
     });
   }
 
@@ -562,8 +605,8 @@ function _startSoftDelete() {
   const wasOpen = state.currentFileHandle &&
     dom.fileNameDisplay.textContent === name;
 
-  // Show undo toast with 5 s countdown
-  const DELAY = 5000;
+  // Show undo toast with 3 s countdown
+  const DELAY = 3000;
   showUndoToast(`"${name}" deleted`, DELAY, () => {
     // UNDO pressed — restore item and cancel
     listItemEl.style.display = '';
@@ -606,6 +649,126 @@ async function _executePendingDelete(wasOpen = false) {
     }
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   DRAG-AND-DROP MOVE — confirm modal + undo toast
+═══════════════════════════════════════════════════════════ */
+
+function requestMoveEntry(dragInfo, destDirHandle, destDirName) {
+  // Flush any already-pending move immediately before starting a new one
+  if (_pendingMove) {
+    clearTimeout(_pendingMove.timer);
+    _executePendingMove(false);
+  }
+
+  _pendingMove = {
+    handle:       dragInfo.handle,
+    name:         dragInfo.name,
+    kind:         dragInfo.kind,
+    srcDirHandle: dragInfo.srcDirHandle,
+    destDirHandle,
+    destDirName,
+    listItemEl:   dragInfo.listItemEl,
+    timer:        null,
+  };
+
+  dom.moveModalSource.textContent = dragInfo.name;
+  dom.moveModalDest.textContent   = destDirName;
+  dom.moveModal.classList.remove('hidden');
+  requestAnimationFrame(() => dom.btnMoveCancel.focus());
+}
+
+function _closeMoveModal() {
+  dom.moveModal.classList.add('hidden');
+}
+
+function _startSoftMove() {
+  _closeMoveModal();
+  if (!_pendingMove) return;
+  const { name, listItemEl } = _pendingMove;
+
+  // Dim the item during the undo window — actual move hasn't happened yet
+  listItemEl.style.opacity       = '0.4';
+  listItemEl.style.pointerEvents = 'none';
+  listItemEl.draggable           = false;
+
+  const wasOpen = state.currentFileHandle &&
+    dom.fileNameDisplay.textContent === name;
+
+  const DELAY = 3000;
+  showUndoToast(`"${name}" moved`, DELAY, () => {
+    // UNDO — restore the item as-is; nothing was written yet
+    listItemEl.style.opacity       = '';
+    listItemEl.style.pointerEvents = '';
+    listItemEl.draggable           = true;
+    _pendingMove = null;
+  });
+
+  _pendingMove.timer = setTimeout(async () => {
+    if (!_pendingMove) return;
+    await _executePendingMove(wasOpen);
+  }, DELAY);
+}
+
+async function _executePendingMove(wasOpen = false) {
+  if (!_pendingMove) return;
+  const { handle, name, kind, srcDirHandle, destDirHandle, destDirName, listItemEl } = _pendingMove;
+  _pendingMove = null;
+
+  try {
+    // Check for name collision at destination
+    try {
+      if (kind === 'file') await destDirHandle.getFileHandle(name);
+      else                 await destDirHandle.getDirectoryHandle(name);
+      // Name exists — abort and restore
+      listItemEl.style.opacity = ''; listItemEl.style.pointerEvents = ''; listItemEl.draggable = true;
+      showToast(`"${name}" already exists in "${destDirName}"`, 'warning');
+      return;
+    } catch (_) { /* name is free — proceed */ }
+
+    if (kind === 'file') {
+      const content   = await (await handle.getFile()).arrayBuffer();
+      const newHandle = await destDirHandle.getFileHandle(name, { create: true });
+      const writable  = await newHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      await srcDirHandle.removeEntry(name);
+    } else {
+      await _copyDirRecursive(handle, name, destDirHandle);
+      await srcDirHandle.removeEntry(name, { recursive: true });
+    }
+
+    listItemEl.remove();
+    if (dom.fileList.querySelectorAll('.file-item').length === 0) {
+      dom.fileListEmpty.classList.remove('hidden');
+    }
+    if (wasOpen || (state.currentFileHandle && dom.fileNameDisplay.textContent === name)) {
+      clearActiveFile();
+    }
+    showToast(`"${name}" moved to "${destDirName}"`, 'success');
+
+  } catch (err) {
+    listItemEl.style.opacity = ''; listItemEl.style.pointerEvents = ''; listItemEl.draggable = true;
+    showToast(`Could not move "${name}": ${err.message}`, 'error');
+  }
+}
+
+// Recursively copy all contents of srcDirHandle into a new sub-folder under destParentHandle.
+async function _copyDirRecursive(srcDirHandle, name, destParentHandle) {
+  const newDir = await destParentHandle.getDirectoryHandle(name, { create: true });
+  for await (const [entryName, entryHandle] of srcDirHandle.entries()) {
+    if (entryHandle.kind === 'file') {
+      const content = await (await entryHandle.getFile()).arrayBuffer();
+      const fh = await newDir.getFileHandle(entryName, { create: true });
+      const wr = await fh.createWritable();
+      await wr.write(content);
+      await wr.close();
+    } else {
+      await _copyDirRecursive(entryHandle, entryName, newDir);
+    }
+  }
+}
+
 
 function showUndoToast(message, delay, onUndo) {
   const toast = document.createElement('div');
@@ -1693,10 +1856,15 @@ function wireKeyboard() {
       return;
     }
 
-    // Escape: close shortcuts → close delete modal → close match nav → exit search → exit fullscreen
+    // Escape: close shortcuts → close move modal → close delete modal → close match nav → exit search → exit fullscreen
     if (e.key === 'Escape') {
       if (!dom.shortcutsModal.classList.contains('hidden')) {
         closeHelp();
+        return;
+      }
+      if (!dom.moveModal.classList.contains('hidden')) {
+        _pendingMove = null;
+        _closeMoveModal();
         return;
       }
       if (!dom.deleteModal.classList.contains('hidden')) {
@@ -1718,6 +1886,20 @@ function wireKeyboard() {
         return;
       }
     }
+  });
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   OS-AWARE KEYBOARD LABELS
+═══════════════════════════════════════════════════════════ */
+function _applyOsShortcutLabels() {
+  const isMac = /Mac|iPhone|iPad/i.test(navigator.userAgent);
+  // Update search bar placeholder
+  dom.searchInput.placeholder = isMac ? 'Search files… (⌘F)' : 'Search files… (Ctrl+F)';
+  // Replace every "Ctrl" <kbd> in the shortcuts modal with ⌘ on Mac
+  dom.shortcutsModal.querySelectorAll('kbd').forEach(kbd => {
+    if (kbd.textContent.trim() === 'Ctrl') kbd.textContent = isMac ? '⌘' : 'Ctrl';
   });
 }
 
@@ -1758,6 +1940,13 @@ function wireEvents() {
   dom.btnMatchPrev.addEventListener('click', matchNavPrev);
   dom.btnMatchNext.addEventListener('click', matchNavNext);
   dom.btnMatchClose.addEventListener('click', closeMatchNav);
+
+  // Move modal
+  dom.btnMoveCancel.addEventListener('click', () => { _pendingMove = null; _closeMoveModal(); });
+  dom.btnMoveConfirm.addEventListener('click', () => { if (_pendingMove) _startSoftMove(); });
+  dom.moveModal.addEventListener('click', e => {
+    if (e.target === dom.moveModal) { _pendingMove = null; _closeMoveModal(); }
+  });
 
   // Help / shortcuts modal
   dom.btnHelp.addEventListener('click', openHelp);

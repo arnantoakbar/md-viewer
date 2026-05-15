@@ -450,6 +450,21 @@ textarea, input { font-family: var(--font-mono); }
   background: rgba(232, 57, 29, 0.1);
 }
 
+/* ── Drag and drop ─────────────────────────────────────── */
+.file-item.dragging {
+  opacity: 0.35;
+  cursor: grabbing;
+}
+
+/* Folder being hovered over as a drop target */
+.file-item.drag-over {
+  background: var(--flame-tint-md) !important;
+  box-shadow: inset 2px 0 0 var(--color-flame), inset -1px 0 0 var(--border);
+  color: var(--color-flame);
+  font-weight: 600;
+}
+.file-item.drag-over .file-item-icon { opacity: 1; }
+
 /* Inline rename input — left panel */
 .file-item-rename {
   flex: 1;
@@ -1384,6 +1399,12 @@ mark.search-match.current {
   align-items: center;
   justify-content: center;
   margin: 0 auto var(--s4);
+}
+
+/* Move modal uses amber instead of flame */
+.modal-icon-move {
+  background: rgba(245,166,35,0.12);
+  color: var(--color-amber);
 }
 .modal-title {
   font-family: var(--font-display);
