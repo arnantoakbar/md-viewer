@@ -5,7 +5,7 @@
 
 A fully client-side Markdown file viewer and editor. Browse your local folders, preview rendered Markdown in real time, edit files, and save changes — all inside the browser with no uploads, no server, and no dependencies to install.
 
-<a href="https://www.producthunt.com/products/md-viewer-2?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-md-viewer-2" target="_blank" rel="noopener noreferrer"><img alt="md-viewer - A fully client-side Markdown file viewer and editor | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1144992&amp;theme=dark&amp;t=1778573254931"></a>
+<a href="https://www.producthunt.com/products/md-viewer-2?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-md-viewer-2" target="_blank" rel="noopener noreferrer"><img alt="md-viewer - A fully client-side Markdown file viewer and editor | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1144992&theme=dark&t=1778573254931"></a>
 
 ## Live Demo
 
@@ -25,19 +25,22 @@ A fully client-side Markdown file viewer and editor. Browse your local folders, 
 ## Features
 
 - **Folder browser** — Pick any local folder and navigate its contents like a file manager. Only Markdown files (`.md`, `.markdown`) and sub-folders are shown, so the tree stays clean.
-- **Real-time preview** — Selecting a file instantly renders it as formatted HTML with syntax-highlighted code blocks.
+- **Real-time preview** — Selecting a file instantly renders it as formatted HTML with syntax-highlighted code blocks. Files always open in rendered view by default.
 - **Mermaid diagrams** — Fenced ` ```mermaid ` blocks render as live SVG diagrams (flowcharts, sequence diagrams, Gantt charts, and more) themed with the Flavida palette.
 - **Full-text search** — Press `Ctrl+F` / `⌘F` to search across every `.md` file in the selected folder. Results show the file name and a matching snippet. Select a result to open the file with all matches highlighted.
 - **In-file match navigator** — When a file is opened from search, a navigator bar shows the total match count and lets you step between every occurrence with `↑` / `↓` buttons or keyboard shortcuts. The current match is highlighted in orange; all others in yellow.
 - **Code / Rendered toggle** — Switch between the rendered view and the raw Markdown source at any time. Edits in the source view are reflected immediately when you switch back to rendered.
-- **Create new file** — Click the `+` button in the sidebar toolbar to create a new `.md` file in the current folder. The file is created instantly and enters rename mode so you can set a real name before writing.
+- **Create new file** — Click the file `+` button in the sidebar toolbar to create a new `.md` file in the current folder. The file is created instantly and enters rename mode so you can set a real name before writing.
+- **Create new folder** — Click the folder `+` button in the sidebar toolbar to create a new sub-folder. It enters rename mode immediately so you can name it before using it.
 - **Duplicate file** — Click the duplicate icon in the preview toolbar (visible when a file is open) to copy the current file. The duplicate is named automatically (`title (2).md`, `title (3).md`, etc.) and opened immediately.
-- **Inline rename** — Double-click any filename in the sidebar or in the toolbar to rename it in place. Press `Enter` or click outside to save; press `Esc` to cancel. Works like macOS Finder / Windows Explorer.
+- **Inline rename** — Double-click any filename or folder name in the sidebar, or double-click the filename in the toolbar, to rename it in place. Press `Enter` or click outside to save; press `Esc` to cancel. Works like macOS Finder / Windows Explorer.
+- **Drag-and-drop move** — Drag any file or folder onto another folder to move it there. A confirmation modal appears before the move executes. Drag to the toolbar area (folder name) to move an item to the parent directory.
+- **Delete file or folder** — Click the trash icon that appears on hover next to any file or folder. A confirmation modal appears, followed by a 3-second undo window before the deletion is permanent. Folder deletion removes all contents recursively.
 - **Edit & save** — The Save button appears only when unsaved changes are detected. Press `Ctrl+S` / `⌘S` or click Save to write back to disk.
 - **Collapsible sidebar** — Hide the file browser to focus on reading or writing. Toggle with the panel button or `Ctrl+B` / `⌘B`.
 - **Fullscreen preview** — Expand the preview to fill the entire window with `F11`. Press `Esc` to exit.
 - **Resizable panel** — Drag the divider between the sidebar and the preview to adjust the split.
-- **Preferences remembered** — Panel width, view mode (rendered/code), and collapsed state are saved to `localStorage` and restored on the next visit.
+- **Preferences remembered** — Panel width and collapsed state are saved to `localStorage` and restored on the next visit.
 - **Privacy-first** — Nothing leaves your machine. No analytics, no telemetry, no cloud storage.
 
 ---
@@ -88,13 +91,15 @@ Then open `http://localhost:8080` in your browser.
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+S` / `⌘S` | Save the current file |
+| `Ctrl+Z` / `⌘Z` | Undo file/folder deletion (during 3 s window) |
 | `Ctrl+B` / `⌘B` | Toggle the file browser sidebar |
 | `Ctrl+F` / `⌘F` | Focus the search bar |
 | `Enter` | Next match (when match navigator is active) |
 | `Shift+Enter` | Previous match (when match navigator is active) |
 | `↓` / `↑` | Next / previous match (when navigator is active and focus is outside editor) |
-| `Esc` | Close match navigator → clear search → exit fullscreen (in priority order) |
+| `Esc` | Close modals / match navigator → clear search → exit fullscreen (in priority order) |
 | `F11` | Toggle fullscreen preview |
+| `Double-click` | Rename any file or folder (sidebar or toolbar) |
 
 ---
 
@@ -141,9 +146,21 @@ Permissions are session-scoped. The next time you open the app, you'll be asked 
 
 The sidebar works like macOS Finder or Windows Explorer in list view:
 
-- Click a **folder** to navigate into it.
+- **Single-click** a folder to navigate into it (with a short delay to allow double-click rename).
+- **Double-click** any file or folder to rename it in place.
 - Click the **↑ Up** button or a breadcrumb segment to go back to a parent directory.
+- Drag a file or folder onto another folder to move it. Drag to the toolbar area to move to the parent directory.
 - Only `.md` / `.markdown` files and folders are listed — other file types are hidden.
+
+### Delete with undo
+
+Clicking the trash icon next to a file or folder shows a confirmation modal. After confirming:
+
+1. The item disappears from the sidebar immediately.
+2. A toast notification with a 3-second countdown appears. Click **Undo** or press `Ctrl+Z` / `⌘Z` to cancel.
+3. If not undone, the item is permanently deleted from disk. Folders are deleted recursively (all contents removed).
+
+The sidebar stays consistent across navigation — if you navigate away and back during the undo window, the pending-delete item remains hidden until the action resolves.
 
 ### Search
 
@@ -172,7 +189,6 @@ The following preferences are stored locally and never sent anywhere:
 | Key | Value |
 |-----|-------|
 | `mdviewer-prefs.panelWidth` | Sidebar width in pixels |
-| `mdviewer-prefs.currentView` | `rendered` or `code` |
 | `mdviewer-prefs.isPanelCollapsed` | `true` or `false` |
 
 To reset preferences, run `localStorage.removeItem('mdviewer-prefs')` in the browser console.

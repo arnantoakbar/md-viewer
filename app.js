@@ -29,12 +29,12 @@ const state = {
 
 const PREF_KEY = 'mdviewer-prefs';
 
-// Tracks the file pending soft-delete (during the 3 s undo window)
-let _pendingDelete = null; // { name, handle, dirHandle, listItemEl, timer }
+// Tracks the file/folder pending soft-delete (during the 3 s undo window)
+let _pendingDelete = null; // { name, handle, kind, dirHandle, listItemEl, timer }
 
 // Drag-and-drop state
 let _dragState   = null; // { handle, name, kind, srcDirHandle, listItemEl }
-let _pendingMove = null; // { handle, name, kind, srcDirHandle, destDirHandle, destDirName, listItemEl, timer }
+let _pendingMove = null; // { handle, name, kind, srcDirHandle, destDirHandle, destDirName, listItemEl }
 
 
 /* ═══════════════════════════════════════════════════════════
@@ -47,7 +47,7 @@ function cacheDom() {
     'landing', 'app',
     'btn-open-folder', 'btn-open-new', 'btn-toggle-panel',
     'btn-up', 'btn-view-rendered', 'btn-view-code',
-    'btn-new-file', 'btn-duplicate',
+    'btn-new-file', 'btn-new-folder', 'btn-duplicate',
     'btn-save', 'btn-fullscreen', 'icon-fullscreen',
     'panel-left', 'resize-handle', 'panel-right',
     'file-list', 'file-list-empty', 'current-dir-name',
@@ -124,11 +124,12 @@ async function openFolder() {
   try {
     const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
 
-    state.rootDirHandle    = handle;
-    state.currentDirHandle = handle;
-    state.dirStack         = [{ handle, name: handle.name }];
+    state.rootDirHandle     = handle;
+    state.currentDirHandle  = handle;
+    state.dirStack          = [{ handle, name: handle.name }];
     state.currentFileHandle = null;
     state.isDirty           = false;
+    state.currentView       = 'rendered'; // always start in rendered view on folder open
 
     showApp();
     await loadDirectory(handle);
@@ -181,11 +182,20 @@ async function loadDirectory(dirHandle) {
 
   const allEntries = [...dirs, ...files];
 
-  if (allEntries.length === 0) {
+  // Filter out any entry that has a pending delete in this directory —
+  // keeps the list consistent even when the user navigates away and back.
+  const pendingDeleteName = (_pendingDelete && _pendingDelete.dirHandle === dirHandle)
+    ? _pendingDelete.name : null;
+
+  const visibleEntries = pendingDeleteName
+    ? allEntries.filter(({ name }) => name !== pendingDeleteName)
+    : allEntries;
+
+  if (visibleEntries.length === 0) {
     dom.fileListEmpty.classList.remove('hidden');
   } else {
     const fragment = document.createDocumentFragment();
-    allEntries.forEach(({ name, handle }) => {
+    visibleEntries.forEach(({ name, handle }) => {
       fragment.appendChild(createFileItem(name, handle));
     });
     dom.fileList.appendChild(fragment);
@@ -215,39 +225,44 @@ function createFileItem(name, handle) {
 
   el.append(icon, label);
 
-  // Delete button (files only) — visible on hover via CSS
-  if (handle.kind === 'file') {
-    const delBtn = document.createElement('span');
-    delBtn.className = 'file-item-delete';
-    delBtn.setAttribute('role', 'button');
-    delBtn.setAttribute('aria-label', `Delete ${name}`);
-    delBtn.setAttribute('title', 'Delete file');
-    delBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-      <path d="M10 11v6"/><path d="M14 11v6"/>
-    </svg>`;
-    delBtn.addEventListener('click', e => {
-      e.stopPropagation(); // don't open the file
-      requestDeleteFile(name, handle, el);
-    });
-    el.appendChild(delBtn);
-  }
+  // Delete button (files and folders) — visible on hover via CSS
+  const delBtn = document.createElement('span');
+  delBtn.className = 'file-item-delete';
+  delBtn.setAttribute('role', 'button');
+  delBtn.setAttribute('aria-label', `Delete ${name}`);
+  delBtn.setAttribute('title', handle.kind === 'directory' ? 'Delete folder' : 'Delete file');
+  delBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+    <path d="M10 11v6"/><path d="M14 11v6"/>
+  </svg>`;
+  delBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    requestDeleteFile(name, handle, el);
+  });
+  el.appendChild(delBtn);
+
+  // For directories, delay navigation 300 ms so a double-click can cancel it
+  // and start a rename instead (otherwise dblclick fires AFTER two navigations).
+  let _navTimer = null;
 
   el.addEventListener('click', () => {
+    // Ignore clicks while a rename input is active on this item
+    if (el.dataset.renaming) return;
     if (handle.kind === 'directory') {
-      enterDirectory(handle, name);
+      clearTimeout(_navTimer);
+      _navTimer = setTimeout(() => { enterDirectory(handle, name); }, 300);
     } else {
       openFile(handle, name, el);
     }
   });
 
-  // Double-click on a file item → inline rename (Finder / Explorer behaviour)
-  if (handle.kind === 'file') {
-    el.addEventListener('dblclick', e => {
-      e.stopPropagation();
-      startRename(handle, state.currentDirHandle, el, name);
-    });
-  }
+  // Double-click → rename (for both files and folders)
+  el.addEventListener('dblclick', e => {
+    e.stopPropagation();
+    clearTimeout(_navTimer); // cancel pending directory navigation
+    if (el.dataset.renaming) return;
+    startRename(handle, state.currentDirHandle, el, name);
+  });
 
   // ── Drag and drop ───────────────────────────────────────
   el.draggable = true;
@@ -384,7 +399,7 @@ async function createNewFile() {
       dom.btnDuplicate.classList.remove('hidden');
       dom.codeEditor.value = '';
       await renderMarkdown('');
-      setView('code'); // go straight to code view so user can start writing
+      setView('code', false); // go straight to code view; don't persist so next file open stays rendered
       updateLineNumbers();
       updateCodeHighlight();
       // Start rename right away so user can set a real name
@@ -392,6 +407,25 @@ async function createNewFile() {
     }
   } catch (err) {
     showToast('Could not create file: ' + err.message, 'error');
+  }
+}
+
+async function createNewFolder() {
+  if (!state.currentDirHandle) return;
+  const name = await _getAvailableName(state.currentDirHandle, 'untitled folder', '');
+  try {
+    const handle = await state.currentDirHandle.getDirectoryHandle(name, { create: true });
+
+    await loadDirectory(state.currentDirHandle);
+
+    // Find the new folder item and immediately start rename
+    const item = [...dom.fileList.querySelectorAll('.file-item')]
+      .find(el => el.dataset.kind === 'directory' && el.querySelector('.file-item-label')?.textContent === name);
+    if (item) {
+      startRename(handle, state.currentDirHandle, item, name);
+    }
+  } catch (err) {
+    showToast('Could not create folder: ' + err.message, 'error');
   }
 }
 
@@ -415,7 +449,10 @@ async function duplicateFile() {
 
     const item = [...dom.fileList.querySelectorAll('.file-item')]
       .find(el => el.querySelector('.file-item-label')?.textContent === newName);
-    if (item) openFile(handle, newName, item);
+    if (item) {
+      await openFile(handle, newName, item);
+      setView('code', false); // duplicated file → start in code view without persisting
+    }
   } catch (err) {
     showToast('Could not duplicate: ' + err.message, 'error');
   }
@@ -426,10 +463,16 @@ async function duplicateFile() {
 // Start inline rename on a left-panel file item.
 function startRename(handle, dirHandle, listItemEl, currentName) {
   // Don't start a second rename if one is already in progress
-  if (listItemEl.querySelector('.file-item-rename')) return;
-  const { base, ext } = _splitName(currentName);
+  if (listItemEl.dataset.renaming) return;
+  // For directories, use the full name as base (no extension splitting)
+  const { base, ext } = handle.kind === 'directory'
+    ? { base: currentName, ext: '' }
+    : _splitName(currentName);
   const label = listItemEl.querySelector('.file-item-label');
   if (!label) return;
+
+  // Mark the item as renaming so click/dblclick handlers are blocked
+  listItemEl.dataset.renaming = '1';
 
   let committed = false;
   const input = document.createElement('input');
@@ -440,9 +483,20 @@ function startRename(handle, dirHandle, listItemEl, currentName) {
   input.focus();
   input.select();
 
+  // Prevent mouse and keyboard events from bubbling to the parent <button>,
+  // which would otherwise trigger navigation or re-open the file.
+  input.addEventListener('click',     e => e.stopPropagation());
+  input.addEventListener('mousedown', e => e.stopPropagation());
+  input.addEventListener('keyup',     e => e.stopPropagation());
+
+  const cleanup = () => {
+    delete listItemEl.dataset.renaming;
+  };
+
   const commit = async () => {
     if (committed) return;
     committed = true;
+    cleanup();
     const newBase = input.value.trim();
     const newName = (newBase || base) + ext;
     input.replaceWith(label);
@@ -454,6 +508,7 @@ function startRename(handle, dirHandle, listItemEl, currentName) {
   const cancel = () => {
     if (committed) return;
     committed = true;
+    cleanup();
     input.replaceWith(label);
     label.textContent = currentName;
   };
@@ -511,53 +566,66 @@ function startToolbarRename() {
   input.addEventListener('blur', commit);
 }
 
-// Rename a file: create with new name, copy content, remove old file.
+// Rename a file or folder: copy to new name, remove old.
 async function _commitRename(handle, dirHandle, oldName, newName) {
   if (!newName || /[/\\]/.test(newName)) {
-    showToast('Invalid file name', 'error');
+    showToast('Invalid name', 'error');
     await loadDirectory(dirHandle);
     return;
   }
   if (newName === oldName) return;
 
-  // Check for collision
+  // Check for collision (entry with newName already exists)
   try {
-    await dirHandle.getFileHandle(newName);
+    if (handle.kind === 'file') await dirHandle.getFileHandle(newName);
+    else await dirHandle.getDirectoryHandle(newName);
     showToast(`"${newName}" already exists`, 'warning');
     await loadDirectory(dirHandle);
     return;
   } catch (_) { /* name is available */ }
 
   try {
-    // Use live editor content if this is the currently open file
-    const isOpen = state.currentFileHandle &&
-                   dom.fileNameDisplay.textContent === oldName;
-    const content = isOpen
-      ? dom.codeEditor.value
-      : await (await handle.getFile()).text();
+    if (handle.kind === 'file') {
+      // Use live editor content if this is the currently open file
+      const isOpen = state.currentFileHandle === handle;
+      const content = isOpen
+        ? dom.codeEditor.value
+        : await (await handle.getFile()).text();
 
-    // Write new file
-    const newHandle = await dirHandle.getFileHandle(newName, { create: true });
-    const writable  = await newHandle.createWritable();
-    await writable.write(content);
-    await writable.close();
+      const newHandle = await dirHandle.getFileHandle(newName, { create: true });
+      const writable  = await newHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      await dirHandle.removeEntry(oldName);
 
-    // Delete old file
-    await dirHandle.removeEntry(oldName);
+      if (isOpen) {
+        state.currentFileHandle = newHandle;
+        dom.fileNameDisplay.textContent = newName;
+      }
+    } else {
+      // Directory rename: deep-copy under new name, then remove old
+      await _copyDirRecursive(handle, newName, dirHandle);
+      await dirHandle.removeEntry(oldName, { recursive: true });
 
-    // Update state if the renamed file is currently open
-    if (isOpen) {
-      state.currentFileHandle = newHandle;
-      dom.fileNameDisplay.textContent = newName;
+      // If this directory (or a descendant) is in the navigation stack,
+      // truncate the stack to just before it so navigation resets cleanly
+      const stackIdx = state.dirStack.findIndex(e => e.handle === handle);
+      if (stackIdx !== -1) {
+        state.dirStack = state.dirStack.slice(0, stackIdx);
+        state.currentDirHandle = state.dirStack[state.dirStack.length - 1].handle;
+        clearActiveFile();
+      }
     }
 
     showToast(`Renamed to "${newName}"`, 'success');
     await loadDirectory(dirHandle);
 
-    // Re-mark the renamed item as active
-    const item = [...dom.fileList.querySelectorAll('.file-item')]
-      .find(el => el.querySelector('.file-item-label')?.textContent === newName);
-    if (item) item.classList.add('active');
+    // Re-mark the renamed file item as active (files only)
+    if (handle.kind === 'file') {
+      const item = [...dom.fileList.querySelectorAll('.file-item')]
+        .find(el => el.querySelector('.file-item-label')?.textContent === newName);
+      if (item) item.classList.add('active');
+    }
 
   } catch (err) {
     showToast('Rename failed: ' + err.message, 'error');
@@ -574,7 +642,14 @@ function requestDeleteFile(name, handle, listItemEl) {
   // If another pending delete exists, execute it immediately first
   if (_pendingDelete) _executePendingDelete();
 
-  _pendingDelete = { name, handle, dirHandle: state.currentDirHandle, listItemEl, timer: null };
+  _pendingDelete = { name, handle, kind: handle.kind, dirHandle: state.currentDirHandle, listItemEl, timer: null };
+
+  // Update modal title and description based on kind
+  const isDir = handle.kind === 'directory';
+  document.getElementById('delete-modal-title').textContent = isDir ? 'Delete folder?' : 'Delete file?';
+  const suffixEl = document.getElementById('delete-modal-suffix');
+  if (suffixEl) suffixEl.textContent = isDir ? ' and all its contents will be permanently deleted.' : ' will be permanently deleted.';
+
   dom.deleteModalFilename.textContent = name;
   dom.deleteModal.classList.remove('hidden');
   // Focus the cancel button by default (safer)
@@ -596,57 +671,54 @@ function closeHelp() {
 
 function _startSoftDelete() {
   _closeDeleteModal();
-  const { name, listItemEl } = _pendingDelete;
+  const { name, dirHandle, listItemEl } = _pendingDelete;
 
-  // Hide the item from the list immediately (but don't delete from FS yet)
+  // Hide from the current DOM view immediately
   listItemEl.style.display = 'none';
-
-  // If this was the open file, we'll clear it when deletion executes;
-  // during the undo window the preview stays intact so user can still read it.
-  const wasOpen = state.currentFileHandle &&
-    dom.fileNameDisplay.textContent === name;
 
   // Show undo toast with 3 s countdown
   const DELAY = 3000;
   showUndoToast(`"${name}" deleted`, DELAY, () => {
-    // UNDO pressed — restore item and cancel
-    listItemEl.style.display = '';
+    // UNDO pressed — clear the pending delete and reload to restore the item
     _pendingDelete = null;
+    if (state.currentDirHandle === dirHandle) {
+      loadDirectory(dirHandle); // fire-and-forget: shows the item again
+    }
   });
 
   // Schedule actual deletion
   _pendingDelete.timer = setTimeout(async () => {
     if (!_pendingDelete) return; // already undone
-    await _executePendingDelete(wasOpen);
+    await _executePendingDelete();
   }, DELAY);
 }
 
-async function _executePendingDelete(wasOpen = false) {
+async function _executePendingDelete() {
   if (!_pendingDelete) return;
-  const { name, dirHandle, listItemEl } = _pendingDelete;
+  const { name, handle, kind, dirHandle, listItemEl } = _pendingDelete;
   _pendingDelete = null;
 
-  // If item is still hidden (not restored by undo), remove it for real
+  // listItemEl.style.display is 'none' when the item is hidden (not undone).
+  // It may be a detached element if the user navigated away, but its style is
+  // still 'none' — that's how we know the undo window expired without undo.
   if (listItemEl.style.display === 'none') {
     try {
-      await dirHandle.removeEntry(name);
+      await dirHandle.removeEntry(name, { recursive: kind === 'directory' });
     } catch (err) {
-      // File may already be gone; restore the item and show error
       listItemEl.style.display = '';
       showToast(`Could not delete "${name}": ${err.message}`, 'error');
       return;
     }
 
-    // Remove the DOM node entirely
-    listItemEl.remove();
-
-    // Check if the file list is now empty
-    const visibleFiles = dom.fileList.querySelectorAll('.file-item');
-    if (visibleFiles.length === 0) dom.fileListEmpty.classList.remove('hidden');
-
-    // Clear the preview if the deleted file was open
-    if (wasOpen || (state.currentFileHandle && dom.fileNameDisplay.textContent === name)) {
+    // Clear the preview only if the deleted file is still the active one
+    if (state.currentFileHandle === handle) {
       clearActiveFile();
+    }
+
+    // Reload the directory to remove any stale DOM nodes
+    // (covers navigate-away-and-back case; no-op if user is elsewhere)
+    if (state.currentDirHandle === dirHandle) {
+      await loadDirectory(dirHandle);
     }
   }
 }
@@ -656,12 +728,6 @@ async function _executePendingDelete(wasOpen = false) {
 ═══════════════════════════════════════════════════════════ */
 
 function requestMoveEntry(dragInfo, destDirHandle, destDirName) {
-  // Flush any already-pending move immediately before starting a new one
-  if (_pendingMove) {
-    clearTimeout(_pendingMove.timer);
-    _executePendingMove(false);
-  }
-
   _pendingMove = {
     handle:       dragInfo.handle,
     name:         dragInfo.name,
@@ -670,7 +736,6 @@ function requestMoveEntry(dragInfo, destDirHandle, destDirName) {
     destDirHandle,
     destDirName,
     listItemEl:   dragInfo.listItemEl,
-    timer:        null,
   };
 
   dom.moveModalSource.textContent = dragInfo.name;
@@ -683,35 +748,13 @@ function _closeMoveModal() {
   dom.moveModal.classList.add('hidden');
 }
 
-function _startSoftMove() {
+async function _startSoftMove() {
   _closeMoveModal();
   if (!_pendingMove) return;
-  const { name, listItemEl } = _pendingMove;
-
-  // Dim the item during the undo window — actual move hasn't happened yet
-  listItemEl.style.opacity       = '0.4';
-  listItemEl.style.pointerEvents = 'none';
-  listItemEl.draggable           = false;
-
-  const wasOpen = state.currentFileHandle &&
-    dom.fileNameDisplay.textContent === name;
-
-  const DELAY = 3000;
-  showUndoToast(`"${name}" moved`, DELAY, () => {
-    // UNDO — restore the item as-is; nothing was written yet
-    listItemEl.style.opacity       = '';
-    listItemEl.style.pointerEvents = '';
-    listItemEl.draggable           = true;
-    _pendingMove = null;
-  });
-
-  _pendingMove.timer = setTimeout(async () => {
-    if (!_pendingMove) return;
-    await _executePendingMove(wasOpen);
-  }, DELAY);
+  await _executePendingMove();
 }
 
-async function _executePendingMove(wasOpen = false) {
+async function _executePendingMove() {
   if (!_pendingMove) return;
   const { handle, name, kind, srcDirHandle, destDirHandle, destDirName, listItemEl } = _pendingMove;
   _pendingMove = null;
@@ -721,9 +764,8 @@ async function _executePendingMove(wasOpen = false) {
     try {
       if (kind === 'file') await destDirHandle.getFileHandle(name);
       else                 await destDirHandle.getDirectoryHandle(name);
-      // Name exists — abort and restore
-      listItemEl.style.opacity = ''; listItemEl.style.pointerEvents = ''; listItemEl.draggable = true;
-      showToast(`"${name}" already exists in "${destDirName}"`, 'warning');
+      // Name exists — abort with a clear message so user knows to rename first
+      showToast(`Can't move: "${destDirName}" already contains an item named "${name}". Rename one of them first.`, 'warning', 5000);
       return;
     } catch (_) { /* name is free — proceed */ }
 
@@ -743,7 +785,7 @@ async function _executePendingMove(wasOpen = false) {
     if (dom.fileList.querySelectorAll('.file-item').length === 0) {
       dom.fileListEmpty.classList.remove('hidden');
     }
-    if (wasOpen || (state.currentFileHandle && dom.fileNameDisplay.textContent === name)) {
+    if (state.currentFileHandle === handle) {
       clearActiveFile();
     }
     showToast(`"${name}" moved to "${destDirName}"`, 'success');
@@ -792,9 +834,8 @@ function showUndoToast(message, delay, onUndo) {
   undoKbd.textContent = kbdShortcut;
   undoBtn.append('Undo ', undoKbd);
   undoBtn.addEventListener('click', () => {
-    // Clear whichever pending-action timer is active
+    // Clear the pending delete timer
     clearTimeout(_pendingDelete?.timer);
-    clearTimeout(_pendingMove?.timer);
     onUndo();
     hide();
   });
@@ -846,7 +887,7 @@ async function openFile(handle, name, listItemEl) {
     dom.lineNumbers._count = null; // force rebuild on next updateLineNumbers()
 
     await renderMarkdown(content);
-    setView(state.currentView);
+    setView('rendered'); // always open existing files in rendered view
     updateLineNumbers();
     updateCodeHighlight();
 
@@ -1136,7 +1177,7 @@ function updateLineNumbers() {
 /* ═══════════════════════════════════════════════════════════
    VIEW TOGGLE
 ═══════════════════════════════════════════════════════════ */
-function setView(view) {
+function setView(view, save = true) {
   if (view === state.currentView && state.currentFileHandle) {
     // Same view — just ensure line numbers are up to date
     if (view === 'code') updateLineNumbers();
@@ -1166,7 +1207,7 @@ function setView(view) {
     }
   }
 
-  savePreferences();
+  if (save) savePreferences();
 }
 
 
@@ -1797,8 +1838,8 @@ function wireKeyboard() {
       return;
     }
 
-    // Undo pending delete OR move: Ctrl/Cmd + Z
-    if (meta && e.key === 'z' && (_pendingDelete || _pendingMove)) {
+    // Undo pending delete: Ctrl/Cmd + Z
+    if (meta && e.key === 'z' && _pendingDelete) {
       e.preventDefault();
       const undoBtn = dom.toastContainer.querySelector('.toast-undo-btn');
       if (undoBtn) undoBtn.click();
@@ -1883,12 +1924,6 @@ function wireKeyboard() {
         _closeMoveModal();
         return;
       }
-      // Esc during the 3-second move-undo window → trigger undo
-      if (_pendingMove) {
-        const undoBtn = dom.toastContainer.querySelector('.toast-undo-btn');
-        if (undoBtn) undoBtn.click();
-        return;
-      }
       if (!dom.deleteModal.classList.contains('hidden')) {
         _pendingDelete = null;
         _closeDeleteModal();
@@ -1934,6 +1969,8 @@ function wireEvents() {
   dom.btnOpenNew.addEventListener('click', openFolder);
   dom.btnTogglePanel.addEventListener('click', togglePanel);
   dom.btnUp.addEventListener('click', goUp);
+  dom.btnNewFile.addEventListener('click', createNewFile);
+  dom.btnNewFolder.addEventListener('click', createNewFolder);
 
   // Panel toolbar (folder name area) as drag-drop target — drops move item to parent directory
   dom.filePanelToolbar.addEventListener('dragover', e => {
@@ -1954,7 +1991,6 @@ function wireEvents() {
     _dragState = null;
     requestMoveEntry(ds, parent.handle, parent.name);
   });
-  dom.btnNewFile.addEventListener('click', createNewFile);
   dom.btnDuplicate.addEventListener('click', duplicateFile);
   dom.btnViewRendered.addEventListener('click', () => setView('rendered'));
   dom.btnViewCode.addEventListener('click', () => setView('code'));

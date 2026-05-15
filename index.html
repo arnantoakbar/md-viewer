@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MD Viewer — Flavida</title>
 
+  <link rel="icon" type="image/png" href="https://ph-files.imgix.net/8a7ea7fe-8426-44b5-b916-3cb00726bb58.png?fm=png&w=64&h=64&fit=crop&frame=1">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,700;12..96,800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
@@ -19,7 +21,7 @@
   <div id="landing" class="landing-screen">
     <div class="landing-card">
       <div class="landing-logo">
-        <div class="logo-dot"></div>
+        <img src="https://ph-files.imgix.net/8a7ea7fe-8426-44b5-b916-3cb00726bb58.png?fm=png&w=64&h=64&fit=crop&frame=1" alt="MD Viewer icon" class="landing-logo-icon">
         <span>MD Viewer</span>
       </div>
 
@@ -58,14 +60,12 @@
       </a>
     </div>
 
-    <!-- Product Hunt badge — outside the card, centred -->
-    <a href="https://www.producthunt.com/products/md-viewer-2?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-md-viewer-2" target="_blank" rel="noopener noreferrer" class="landing-ph-badge">
-      <img alt="md-viewer - A fully client-side Markdown file viewer and editor | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1144992&amp;theme=light&amp;t=1778826810396">
-    </a>
-
-    <!-- Masthead footer -->
+    <!-- Masthead footer (contains PH badge above text) -->
     <footer class="landing-footer">
-      made by <a href="mailto:hello@arnan.to">hello@arnan.to</a> with Claude Code
+      <a href="https://www.producthunt.com/products/md-viewer-2?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-md-viewer-2" target="_blank" rel="noopener noreferrer" class="landing-ph-badge">
+        <img alt="md-viewer - A fully client-side Markdown file viewer and editor | Product Hunt" width="160" height="35" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1144992&amp;theme=light&amp;t=1778826810396">
+      </a>
+      <span>made by <a href="mailto:hello@arnan.to">hello@arnan.to</a> with Claude Code</span>
     </footer>
 
     <div class="landing-blob landing-blob-1"></div>
@@ -122,9 +122,17 @@
               </svg>
             </button>
             <span class="panel-toolbar-label" id="current-dir-name">—</span>
+            <button id="btn-new-folder" class="icon-btn icon-btn-panel" title="New folder in current folder">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                <line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>
+              </svg>
+            </button>
             <button id="btn-new-file" class="icon-btn icon-btn-panel" title="New file in current folder">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/>
               </svg>
             </button>
           </div>
@@ -285,7 +293,7 @@
       </div>
       <h3 id="delete-modal-title" class="modal-title">Delete file?</h3>
       <p class="modal-desc">
-        <strong id="delete-modal-filename"></strong> will be permanently deleted.
+        <strong id="delete-modal-filename"></strong><span id="delete-modal-suffix"> will be permanently deleted.</span>
         You'll have 3 seconds to undo.
       </p>
       <div class="modal-actions">
@@ -313,7 +321,6 @@
       <h3 id="move-modal-title" class="modal-title">Move here?</h3>
       <p class="modal-desc">
         Move <strong id="move-modal-source"></strong> into <strong id="move-modal-dest"></strong>?
-        You'll have 3 seconds to undo.
       </p>
       <div class="modal-actions">
         <button id="btn-move-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
