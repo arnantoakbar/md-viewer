@@ -56,6 +56,7 @@ function cacheDom() {
     'file-name-display', 'dirty-indicator',
     'api-unsupported', 'toast-container',
     'delete-modal', 'delete-modal-filename', 'btn-delete-cancel', 'btn-delete-confirm',
+    'file-panel-toolbar',
     'btn-help', 'shortcuts-modal', 'btn-shortcuts-close',
     'move-modal', 'move-modal-source', 'move-modal-dest', 'btn-move-cancel', 'btn-move-confirm',
     // Search
@@ -1822,6 +1823,20 @@ function wireKeyboard() {
       return;
     }
 
+    // Enter confirms the visible action modal (delete or move)
+    if (e.key === 'Enter' && !e.shiftKey) {
+      if (!dom.deleteModal.classList.contains('hidden')) {
+        e.preventDefault();
+        if (_pendingDelete) _startSoftDelete();
+        return;
+      }
+      if (!dom.moveModal.classList.contains('hidden')) {
+        e.preventDefault();
+        if (_pendingMove) _startSoftMove();
+        return;
+      }
+    }
+
     // Match navigation (only when nav bar is active and focus is not in the editor)
     if (state.matchNav.active && document.activeElement !== dom.codeEditor) {
       // Enter / Shift+Enter — next / prev match
@@ -1920,19 +1935,19 @@ function wireEvents() {
   dom.btnTogglePanel.addEventListener('click', togglePanel);
   dom.btnUp.addEventListener('click', goUp);
 
-  // ↑ Up button as drag-drop target — drop moves item to the parent directory
-  dom.btnUp.addEventListener('dragover', e => {
+  // Panel toolbar (folder name area) as drag-drop target — drops move item to parent directory
+  dom.filePanelToolbar.addEventListener('dragover', e => {
     if (!_dragState || state.dirStack.length <= 1) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    dom.btnUp.classList.add('drag-over');
+    dom.filePanelToolbar.classList.add('drag-over');
   });
-  dom.btnUp.addEventListener('dragleave', e => {
-    if (!dom.btnUp.contains(e.relatedTarget)) dom.btnUp.classList.remove('drag-over');
+  dom.filePanelToolbar.addEventListener('dragleave', e => {
+    if (!dom.filePanelToolbar.contains(e.relatedTarget)) dom.filePanelToolbar.classList.remove('drag-over');
   });
-  dom.btnUp.addEventListener('drop', e => {
+  dom.filePanelToolbar.addEventListener('drop', e => {
     e.preventDefault();
-    dom.btnUp.classList.remove('drag-over');
+    dom.filePanelToolbar.classList.remove('drag-over');
     if (!_dragState || state.dirStack.length <= 1) return;
     const parent = state.dirStack[state.dirStack.length - 2];
     const ds = _dragState;
