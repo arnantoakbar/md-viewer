@@ -426,6 +426,30 @@ textarea, input { font-family: var(--font-mono); }
   flex: 1;
 }
 
+/* Delete button — appears on hover, files only */
+.file-item-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-xs);
+  color: transparent;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0;
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+  line-height: 1;
+}
+.file-item:hover .file-item-delete {
+  color: rgba(232, 57, 29, 0.5);
+}
+.file-item-delete:hover {
+  color: var(--color-flame) !important;
+  background: rgba(232, 57, 29, 0.1);
+}
+
 /* Inline rename input — left panel */
 .file-item-rename {
   flex: 1;
@@ -1265,6 +1289,126 @@ mark.search-match.current {
 .toast.warning { border-left-color: var(--color-amber); }
 .toast.error   { border-left-color: var(--color-flame); }
 .toast.info    { border-left-color: rgba(255,255,255,0.3); }
+
+/* Undo toast layout */
+.toast-undo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+}
+.toast-undo-btn {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border: 1px solid rgba(255,255,255,0.35);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: rgba(255,255,255,0.9);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t);
+}
+.toast-undo-btn:hover {
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.6);
+}
+/* Shrinking progress bar at bottom of undo toast */
+.toast-progress {
+  height: 2px;
+  background: var(--color-flame);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  margin: var(--s2) calc(-1 * var(--s4)) calc(-1 * var(--s3));
+  transform-origin: left;
+  animation: toast-shrink linear forwards;
+}
+@keyframes toast-shrink {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+/* ── Danger button ────────────────────────────────────────── */
+.btn-danger {
+  background: var(--color-flame);
+  color: white;
+  border: none;
+  box-shadow: 0 2px 8px rgba(232,57,29,0.35);
+}
+.btn-danger:hover {
+  background: #c82d14;
+  box-shadow: 0 4px 12px rgba(232,57,29,0.45);
+}
+
+/* ── Delete confirmation modal ───────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  backdrop-filter: blur(2px);
+  animation: modal-fade-in 0.15s ease;
+}
+.modal-overlay.hidden { display: none; }
+
+@keyframes modal-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.modal-card {
+  background: white;
+  border-radius: var(--radius-card);
+  padding: var(--s8) var(--s8);
+  max-width: 360px;
+  width: 90%;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  text-align: center;
+  animation: modal-slide-in 0.15s ease;
+}
+@keyframes modal-slide-in {
+  from { transform: translateY(-12px); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+.modal-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(232,57,29,0.1);
+  color: var(--color-flame);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto var(--s4);
+}
+.modal-title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--color-charcoal);
+  margin-bottom: var(--s2);
+}
+.modal-desc {
+  font-size: 13px;
+  color: var(--color-mid);
+  line-height: 1.6;
+  margin-bottom: var(--s6);
+}
+.modal-desc strong {
+  color: var(--color-charcoal);
+  font-weight: 600;
+  word-break: break-all;
+}
+.modal-actions {
+  display: flex;
+  gap: var(--s2);
+  justify-content: center;
+}
 
 
 /* ═══════════════════════════════════════════════════════════

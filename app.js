@@ -29,6 +29,9 @@ const state = {
 
 const PREF_KEY = 'mdviewer-prefs';
 
+// Tracks the file pending soft-delete (during the 5 s undo window)
+let _pendingDelete = null; // { name, handle, dirHandle, listItemEl, timer }
+
 
 /* ═══════════════════════════════════════════════════════════
    DOM REFERENCES
@@ -48,6 +51,7 @@ function cacheDom() {
     'preview-pane', 'preview-empty', 'code-pane', 'code-editor', 'code-highlight', 'line-numbers',
     'file-name-display', 'dirty-indicator',
     'api-unsupported', 'toast-container',
+    'delete-modal', 'delete-modal-filename', 'btn-delete-cancel', 'btn-delete-confirm',
     // Search
     'search-bar', 'search-input', 'btn-search-clear', 'search-results', 'search-status',
     // Match navigator
@@ -201,6 +205,24 @@ function createFileItem(name, handle) {
   label.title = name;
 
   el.append(icon, label);
+
+  // Delete button (files only) — visible on hover via CSS
+  if (handle.kind === 'file') {
+    const delBtn = document.createElement('span');
+    delBtn.className = 'file-item-delete';
+    delBtn.setAttribute('role', 'button');
+    delBtn.setAttribute('aria-label', `Delete ${name}`);
+    delBtn.setAttribute('title', 'Delete file');
+    delBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      <path d="M10 11v6"/><path d="M14 11v6"/>
+    </svg>`;
+    delBtn.addEventListener('click', e => {
+      e.stopPropagation(); // don't open the file
+      requestDeleteFile(name, handle, el);
+    });
+    el.appendChild(delBtn);
+  }
 
   el.addEventListener('click', () => {
     if (handle.kind === 'directory') {
@@ -495,6 +517,123 @@ async function _commitRename(handle, dirHandle, oldName, newName) {
     showToast('Rename failed: ' + err.message, 'error');
     await loadDirectory(dirHandle);
   }
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   FILE DELETION — confirm modal + undo toast
+═══════════════════════════════════════════════════════════ */
+
+function requestDeleteFile(name, handle, listItemEl) {
+  // If another pending delete exists, execute it immediately first
+  if (_pendingDelete) _executePendingDelete();
+
+  _pendingDelete = { name, handle, dirHandle: state.currentDirHandle, listItemEl, timer: null };
+  dom.deleteModalFilename.textContent = name;
+  dom.deleteModal.classList.remove('hidden');
+  // Focus the cancel button by default (safer)
+  requestAnimationFrame(() => dom.btnDeleteCancel.focus());
+}
+
+function _closeDeleteModal() {
+  dom.deleteModal.classList.add('hidden');
+}
+
+function _startSoftDelete() {
+  _closeDeleteModal();
+  const { name, listItemEl } = _pendingDelete;
+
+  // Hide the item from the list immediately (but don't delete from FS yet)
+  listItemEl.style.display = 'none';
+
+  // If this was the open file, we'll clear it when deletion executes;
+  // during the undo window the preview stays intact so user can still read it.
+  const wasOpen = state.currentFileHandle &&
+    dom.fileNameDisplay.textContent === name;
+
+  // Show undo toast with 5 s countdown
+  const DELAY = 5000;
+  showUndoToast(`"${name}" deleted`, DELAY, () => {
+    // UNDO pressed — restore item and cancel
+    listItemEl.style.display = '';
+    _pendingDelete = null;
+  });
+
+  // Schedule actual deletion
+  _pendingDelete.timer = setTimeout(async () => {
+    if (!_pendingDelete) return; // already undone
+    await _executePendingDelete(wasOpen);
+  }, DELAY);
+}
+
+async function _executePendingDelete(wasOpen = false) {
+  if (!_pendingDelete) return;
+  const { name, dirHandle, listItemEl } = _pendingDelete;
+  _pendingDelete = null;
+
+  // If item is still hidden (not restored by undo), remove it for real
+  if (listItemEl.style.display === 'none') {
+    try {
+      await dirHandle.removeEntry(name);
+    } catch (err) {
+      // File may already be gone; restore the item and show error
+      listItemEl.style.display = '';
+      showToast(`Could not delete "${name}": ${err.message}`, 'error');
+      return;
+    }
+
+    // Remove the DOM node entirely
+    listItemEl.remove();
+
+    // Check if the file list is now empty
+    const visibleFiles = dom.fileList.querySelectorAll('.file-item');
+    if (visibleFiles.length === 0) dom.fileListEmpty.classList.remove('hidden');
+
+    // Clear the preview if the deleted file was open
+    if (wasOpen || (state.currentFileHandle && dom.fileNameDisplay.textContent === name)) {
+      clearActiveFile();
+    }
+  }
+}
+
+function showUndoToast(message, delay, onUndo) {
+  const toast = document.createElement('div');
+  toast.className = 'toast warning';
+  toast.setAttribute('role', 'status');
+
+  const row = document.createElement('div');
+  row.className = 'toast-undo-row';
+
+  const text = document.createElement('span');
+  text.textContent = message;
+
+  const undoBtn = document.createElement('button');
+  undoBtn.className = 'toast-undo-btn';
+  undoBtn.textContent = 'Undo';
+  undoBtn.addEventListener('click', () => {
+    clearTimeout(_pendingDelete?.timer);
+    onUndo();
+    hide();
+  });
+
+  row.append(text, undoBtn);
+
+  const progress = document.createElement('div');
+  progress.className = 'toast-progress';
+  progress.style.animationDuration = delay + 'ms';
+
+  toast.append(row, progress);
+  dom.toastContainer.appendChild(toast);
+
+  toast.getBoundingClientRect(); // force reflow
+  toast.classList.add('show');
+
+  const hide = () => {
+    toast.classList.remove('show');
+    toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+  };
+
+  setTimeout(hide, delay + 300);
 }
 
 
@@ -1521,8 +1660,13 @@ function wireKeyboard() {
       return;
     }
 
-    // Escape: close match nav → exit search → exit fullscreen (priority order)
+    // Escape: close delete modal → close match nav → exit search → exit fullscreen
     if (e.key === 'Escape') {
+      if (!dom.deleteModal.classList.contains('hidden')) {
+        _pendingDelete = null;
+        _closeDeleteModal();
+        return;
+      }
       if (state.matchNav.active && !state.searchActive) {
         closeMatchNav();
         return;
@@ -1577,4 +1721,20 @@ function wireEvents() {
   dom.btnMatchPrev.addEventListener('click', matchNavPrev);
   dom.btnMatchNext.addEventListener('click', matchNavNext);
   dom.btnMatchClose.addEventListener('click', closeMatchNav);
+
+  // Delete modal
+  dom.btnDeleteCancel.addEventListener('click', () => {
+    _pendingDelete = null;
+    _closeDeleteModal();
+  });
+  dom.btnDeleteConfirm.addEventListener('click', () => {
+    if (_pendingDelete) _startSoftDelete();
+  });
+  // Click the backdrop to cancel
+  dom.deleteModal.addEventListener('click', e => {
+    if (e.target === dom.deleteModal) {
+      _pendingDelete = null;
+      _closeDeleteModal();
+    }
+  });
 }
