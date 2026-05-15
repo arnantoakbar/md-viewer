@@ -52,6 +52,7 @@ function cacheDom() {
     'file-name-display', 'dirty-indicator',
     'api-unsupported', 'toast-container',
     'delete-modal', 'delete-modal-filename', 'btn-delete-cancel', 'btn-delete-confirm',
+    'btn-help', 'shortcuts-modal', 'btn-shortcuts-close',
     // Search
     'search-bar', 'search-input', 'btn-search-clear', 'search-results', 'search-status',
     // Match navigator
@@ -134,6 +135,7 @@ async function openFolder() {
 function showApp() {
   dom.landing.classList.add('hidden');
   dom.app.classList.remove('hidden');
+  dom.btnHelp.classList.remove('hidden');
   applyPreferences();
 }
 
@@ -539,6 +541,15 @@ function _closeDeleteModal() {
   dom.deleteModal.classList.add('hidden');
 }
 
+function openHelp() {
+  dom.shortcutsModal.classList.remove('hidden');
+  requestAnimationFrame(() => dom.btnShortcutsClose.focus());
+}
+
+function closeHelp() {
+  dom.shortcutsModal.classList.add('hidden');
+}
+
 function _startSoftDelete() {
   _closeDeleteModal();
   const { name, listItemEl } = _pendingDelete;
@@ -609,7 +620,13 @@ function showUndoToast(message, delay, onUndo) {
 
   const undoBtn = document.createElement('button');
   undoBtn.className = 'toast-undo-btn';
-  undoBtn.textContent = 'Undo';
+  // Show the keyboard shortcut hint inside the button label
+  const isMac = /Mac|iPhone|iPad/i.test(navigator.userAgent);
+  const kbdShortcut = isMac ? '⌘Z' : 'Ctrl+Z';
+  const undoKbd = document.createElement('kbd');
+  undoKbd.className = 'toast-kbd';
+  undoKbd.textContent = kbdShortcut;
+  undoBtn.append('Undo ', undoKbd);
   undoBtn.addEventListener('click', () => {
     clearTimeout(_pendingDelete?.timer);
     onUndo();
@@ -1614,6 +1631,22 @@ function wireKeyboard() {
       return;
     }
 
+    // Undo pending delete: Ctrl/Cmd + Z
+    if (meta && e.key === 'z' && _pendingDelete) {
+      e.preventDefault();
+      // Programmatically click the Undo button in the active toast
+      const undoBtn = dom.toastContainer.querySelector('.toast-undo-btn');
+      if (undoBtn) undoBtn.click();
+      return;
+    }
+
+    // Show shortcuts help: ? (when not typing in an input)
+    if (e.key === '?' && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+      if (!appVisible) return;
+      openHelp();
+      return;
+    }
+
     // Focus search: Ctrl/Cmd + F
     if (meta && e.key === 'f') {
       e.preventDefault();
@@ -1660,8 +1693,12 @@ function wireKeyboard() {
       return;
     }
 
-    // Escape: close delete modal → close match nav → exit search → exit fullscreen
+    // Escape: close shortcuts → close delete modal → close match nav → exit search → exit fullscreen
     if (e.key === 'Escape') {
+      if (!dom.shortcutsModal.classList.contains('hidden')) {
+        closeHelp();
+        return;
+      }
       if (!dom.deleteModal.classList.contains('hidden')) {
         _pendingDelete = null;
         _closeDeleteModal();
@@ -1721,6 +1758,13 @@ function wireEvents() {
   dom.btnMatchPrev.addEventListener('click', matchNavPrev);
   dom.btnMatchNext.addEventListener('click', matchNavNext);
   dom.btnMatchClose.addEventListener('click', closeMatchNav);
+
+  // Help / shortcuts modal
+  dom.btnHelp.addEventListener('click', openHelp);
+  dom.btnShortcutsClose.addEventListener('click', closeHelp);
+  dom.shortcutsModal.addEventListener('click', e => {
+    if (e.target === dom.shortcutsModal) closeHelp();
+  });
 
   // Delete modal
   dom.btnDeleteCancel.addEventListener('click', () => {

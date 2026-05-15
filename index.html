@@ -261,6 +261,9 @@
   <!-- TOAST CONTAINER -->
   <div id="toast-container" class="toast-container"></div>
 
+  <!-- HELP BUTTON (fixed bottom-left) -->
+  <button id="btn-help" class="help-btn hidden" title="Keyboard shortcuts (?)" type="button">?</button>
+
   <!-- DELETE CONFIRMATION MODAL -->
   <div id="delete-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
     <div class="modal-card">
@@ -284,6 +287,84 @@
           Delete
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- KEYBOARD SHORTCUTS MODAL -->
+  <div id="shortcuts-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcuts-modal-title">
+    <div class="modal-card shortcuts-card">
+      <div class="shortcuts-header">
+        <h3 id="shortcuts-modal-title" class="modal-title">Keyboard Shortcuts</h3>
+        <button id="btn-shortcuts-close" class="modal-close-btn" type="button" title="Close (Esc)">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="shortcuts-grid">
+        <!-- File -->
+        <div class="shortcut-group">
+          <div class="shortcut-group-label">File</div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Save file</span>
+            <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>S</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Undo file deletion</span>
+            <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Rename file</span>
+            <div class="shortcut-keys"><kbd>Double-click</kbd></div>
+          </div>
+        </div>
+
+        <!-- View -->
+        <div class="shortcut-group">
+          <div class="shortcut-group-label">View</div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Toggle file browser</span>
+            <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>B</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Toggle fullscreen</span>
+            <div class="shortcut-keys"><kbd>F11</kbd></div>
+          </div>
+        </div>
+
+        <!-- Search -->
+        <div class="shortcut-group">
+          <div class="shortcut-group-label">Search</div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Focus search bar</span>
+            <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>F</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Next match</span>
+            <div class="shortcut-keys"><kbd>Enter</kbd><span>/</span><kbd>↓</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Previous match</span>
+            <div class="shortcut-keys"><kbd>Shift</kbd><span>+</span><kbd>Enter</kbd><span>/</span><kbd>↑</kbd></div>
+          </div>
+        </div>
+
+        <!-- General -->
+        <div class="shortcut-group">
+          <div class="shortcut-group-label">General</div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Show shortcuts</span>
+            <div class="shortcut-keys"><kbd>?</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Close / dismiss</span>
+            <div class="shortcut-keys"><kbd>Esc</kbd></div>
+          </div>
+        </div>
+      </div>
+
+      <p class="shortcuts-footer">On Mac, use <kbd>⌘</kbd> instead of <kbd>Ctrl</kbd></p>
     </div>
   </div>
 
