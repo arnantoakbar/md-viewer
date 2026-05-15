@@ -791,7 +791,9 @@ function showUndoToast(message, delay, onUndo) {
   undoKbd.textContent = kbdShortcut;
   undoBtn.append('Undo ', undoKbd);
   undoBtn.addEventListener('click', () => {
+    // Clear whichever pending-action timer is active
     clearTimeout(_pendingDelete?.timer);
+    clearTimeout(_pendingMove?.timer);
     onUndo();
     hide();
   });
@@ -1698,6 +1700,26 @@ function renderBreadcrumb() {
       seg.addEventListener('click', () => navigateToBreadcrumb(index));
     }
 
+    // ── Breadcrumb drop target (drag item to any parent dir, including root) ──
+    seg.addEventListener('dragover', e => {
+      if (!_dragState) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      seg.classList.add('bc-drag-over');
+    });
+    seg.addEventListener('dragleave', e => {
+      if (!seg.contains(e.relatedTarget)) seg.classList.remove('bc-drag-over');
+    });
+    seg.addEventListener('drop', e => {
+      e.preventDefault();
+      seg.classList.remove('bc-drag-over');
+      if (!_dragState) return;
+      const { handle: dirHandle, name: dirName } = state.dirStack[index];
+      const ds = _dragState;
+      _dragState = null;
+      requestMoveEntry(ds, dirHandle, dirName);
+    });
+
     dom.breadcrumb.appendChild(seg);
   });
 }
@@ -1794,10 +1816,9 @@ function wireKeyboard() {
       return;
     }
 
-    // Undo pending delete: Ctrl/Cmd + Z
-    if (meta && e.key === 'z' && _pendingDelete) {
+    // Undo pending delete OR move: Ctrl/Cmd + Z
+    if (meta && e.key === 'z' && (_pendingDelete || _pendingMove)) {
       e.preventDefault();
-      // Programmatically click the Undo button in the active toast
       const undoBtn = dom.toastContainer.querySelector('.toast-undo-btn');
       if (undoBtn) undoBtn.click();
       return;
@@ -1865,6 +1886,12 @@ function wireKeyboard() {
       if (!dom.moveModal.classList.contains('hidden')) {
         _pendingMove = null;
         _closeMoveModal();
+        return;
+      }
+      // Esc during the 3-second move-undo window → trigger undo
+      if (_pendingMove) {
+        const undoBtn = dom.toastContainer.querySelector('.toast-undo-btn');
+        if (undoBtn) undoBtn.click();
         return;
       }
       if (!dom.deleteModal.classList.contains('hidden')) {

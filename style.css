@@ -1123,6 +1123,11 @@ mark.search-match.current {
   cursor: default;
   pointer-events: none;
 }
+.breadcrumb-segment.bc-drag-over {
+  color: var(--color-amber) !important;
+  background: rgba(245, 166, 35, 0.18) !important;
+}
+
 .breadcrumb-separator {
   color: rgba(255,255,255,0.22);
   font-size: 11px;
