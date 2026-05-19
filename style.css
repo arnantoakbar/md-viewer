@@ -1315,10 +1315,15 @@ mark.search-match.current {
   outline: none;
   white-space: nowrap;
 }
-.view-toggle-btn:hover { color: var(--color-charcoal); }
+.view-toggle-btn:hover:not(:disabled) { color: var(--color-charcoal); }
 .view-toggle-btn.active {
   background: var(--gradient-flame);
   color: white;
+}
+.view-toggle-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 

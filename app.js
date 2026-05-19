@@ -342,10 +342,24 @@ function clearActiveFile() {
   dom.dirtyIndicator.classList.add('hidden');
   dom.btnSave.classList.add('hidden');
   dom.btnDuplicate.classList.add('hidden');
+
+  // Reset rendered pane to empty state
   dom.previewEmpty.classList.remove('hidden');
   dom.previewPane.innerHTML = '';
   dom.previewPane.appendChild(dom.previewEmpty);
+
+  // Clear code editor content AND the syntax-highlight overlay that renders
+  // behind the transparent textarea — without this, the highlight div keeps
+  // the previous file's coloured content visible when switching to Code view.
   dom.codeEditor.value = '';
+  dom.codeHighlight.innerHTML = '';
+  dom.lineNumbers.innerHTML = '';
+  dom.lineNumbers._count    = null;
+  dom.lineNumbers._activeLine = null;
+
+  // Disable view toggle while nothing is open (re-enabled in openFile)
+  dom.btnViewRendered.disabled = true;
+  dom.btnViewCode.disabled     = true;
 }
 
 
@@ -397,6 +411,8 @@ async function createNewFile() {
       dom.dirtyIndicator.classList.add('hidden');
       dom.btnSave.classList.add('hidden');
       dom.btnDuplicate.classList.remove('hidden');
+      dom.btnViewRendered.disabled = false;
+      dom.btnViewCode.disabled     = false;
       dom.codeEditor.value = '';
       await renderMarkdown('');
       setView('code', false); // go straight to code view; don't persist so next file open stays rendered
@@ -883,6 +899,8 @@ async function openFile(handle, name, listItemEl) {
     dom.dirtyIndicator.classList.add('hidden');
     dom.btnSave.classList.add('hidden');
     dom.btnDuplicate.classList.remove('hidden');
+    dom.btnViewRendered.disabled = false;
+    dom.btnViewCode.disabled     = false;
     dom.codeEditor.value = content;
     dom.lineNumbers._count = null; // force rebuild on next updateLineNumbers()
 
@@ -1521,6 +1539,8 @@ async function openFileFromSearch(result, query) {
     dom.fileNameDisplay.textContent = result.name;
     dom.dirtyIndicator.classList.add('hidden');
     dom.btnSave.classList.add('hidden');
+    dom.btnViewRendered.disabled = false;
+    dom.btnViewCode.disabled     = false;
     dom.codeEditor.value = content;
     dom.lineNumbers._count = null;
 
@@ -1820,6 +1840,10 @@ function applyPreferences() {
   dom.btnViewCode.classList.toggle('active', state.currentView === 'code');
   dom.previewPane.classList.toggle('hidden', state.currentView !== 'rendered');
   dom.codePane.classList.toggle('hidden', state.currentView !== 'code');
+
+  // No file is open yet — disable the view toggle until a file is selected
+  dom.btnViewRendered.disabled = true;
+  dom.btnViewCode.disabled     = true;
 }
 
 
