@@ -1558,6 +1558,14 @@ mark.search-match.current {
 }
 .preview-pane a:hover { color: var(--color-orange); }
 
+/* ==Highlight== marks */
+.preview-pane mark.md-highlight {
+  background: rgba(253, 224, 71, 0.40);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
 /* Inline code (scoped to inline only — not inside <pre>) */
 .preview-pane :not(pre) > code {
   font-family: var(--font-mono);
@@ -1870,4 +1878,153 @@ kbd {
   color: rgba(255,255,255,0.88);
   font-size: 9px;
   padding: 1px 4px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   INLINE EDITING — EDIT TOGGLE BUTTON
+═══════════════════════════════════════════════════════════ */
+
+/* Active state for the edit inline button */
+.icon-btn.edit-active {
+  background: var(--flame-tint-md);
+  color: var(--color-flame);
+}
+
+/* Preview pane in inline-edit mode */
+.preview-pane.inline-edit-active {
+  background: #FFFCF8;
+  cursor: text;
+}
+
+/* The contenteditable element inside the preview pane during edit mode */
+.inline-editor {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--color-charcoal);
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 100%;
+  outline: none;
+  padding: var(--s8) var(--s10);
+  max-width: 860px;
+  margin: 0 auto;
+  caret-color: var(--color-flame);
+}
+
+/* Edit mode notice bar */
+.inline-edit-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s4);
+  background: var(--flame-tint-xs);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--color-mid);
+  flex-shrink: 0;
+  user-select: none;
+}
+.inline-edit-notice svg { flex-shrink: 0; }
+.inline-edit-notice strong { color: var(--color-flame); }
+
+
+/* ═══════════════════════════════════════════════════════════
+   FLOATING FORMAT TOOLBAR
+═══════════════════════════════════════════════════════════ */
+
+.format-toolbar {
+  position: fixed;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--color-charcoal);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-pill);
+  padding: 3px 6px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.35), 0 1px 4px rgba(0,0,0,0.2);
+  /* Don't allow the toolbar to receive focus and steal selection */
+  pointer-events: auto;
+  user-select: none;
+  /* Fade in */
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  white-space: nowrap;
+}
+.format-toolbar.hidden {
+  display: none;
+}
+
+.fmt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 5px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: rgba(255,255,255,0.82);
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--t), color var(--t);
+  line-height: 1;
+}
+.fmt-btn:hover {
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+}
+.fmt-btn:active {
+  background: rgba(255,255,255,0.18);
+}
+
+/* Specific button variants */
+.fmt-btn.fmt-heading {
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
+.fmt-btn.fmt-italic-btn i { font-style: italic; }
+.fmt-btn.fmt-strike-btn s { text-decoration: line-through; }
+.fmt-btn.fmt-mono-btn code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.fmt-btn.fmt-highlight-btn {
+  background: rgba(253, 224, 71, 0.2);
+  color: #fde047;
+  font-size: 10.5px;
+}
+.fmt-btn.fmt-highlight-btn:hover {
+  background: rgba(253, 224, 71, 0.3);
+  color: #fef08a;
+}
+
+.fmt-sep {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  background: rgba(255,255,255,0.18);
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+
+/* ── Active indicator: small arrow below toolbar ── */
+.format-toolbar::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--color-charcoal);
+  margin-top: -1px;
+  pointer-events: none;
 }

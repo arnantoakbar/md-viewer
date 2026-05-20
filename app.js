@@ -14,6 +14,7 @@ const state = {
   isFullscreen:      false,
   panelWidth:        280,
   isResizing:        false,
+  isInlineEditing:   false,   // true while the inline markdown editor is active
   // Search
   searchActive:      false,
   searchQuery:       '',
@@ -47,8 +48,9 @@ function cacheDom() {
     'landing', 'app',
     'btn-open-folder', 'btn-open-new', 'btn-toggle-panel',
     'btn-up', 'btn-view-rendered', 'btn-view-code',
-    'btn-new-file', 'btn-new-folder', 'btn-duplicate',
+    'btn-new-file', 'btn-new-folder', 'btn-duplicate', 'btn-edit-inline',
     'btn-save', 'btn-fullscreen', 'icon-fullscreen',
+    'format-toolbar',
     'panel-left', 'resize-handle', 'panel-right',
     'file-list', 'file-list-empty', 'current-dir-name',
     'breadcrumb',
@@ -79,6 +81,7 @@ function init() {
   cacheDom();
   loadPreferences();
   _applyOsShortcutLabels();
+  _registerMarkedExtensions();
 
   if (!('showDirectoryPicker' in window)) {
     dom.apiUnsupported.classList.remove('hidden');
@@ -106,6 +109,7 @@ function init() {
 
   wireEvents();
   initResizeHandle();
+  initInlineEditor();
   wireKeyboard();
 }
 
@@ -335,6 +339,9 @@ async function navigateToBreadcrumb(depth) {
 }
 
 function clearActiveFile() {
+  // Exit inline edit mode if active — sync to code editor first
+  if (state.isInlineEditing) _exitInlineEditMode(false); // false = skip re-render
+
   state.currentFileHandle = null;
   state.isDirty = false;
   dom.fileNameDisplay.textContent = 'No file open';
@@ -342,6 +349,7 @@ function clearActiveFile() {
   dom.dirtyIndicator.classList.add('hidden');
   dom.btnSave.classList.add('hidden');
   dom.btnDuplicate.classList.add('hidden');
+  dom.btnEditInline.classList.add('hidden');
 
   // Reset rendered pane to empty state
   dom.previewEmpty.classList.remove('hidden');
@@ -413,6 +421,7 @@ async function createNewFile() {
       dom.btnDuplicate.classList.remove('hidden');
       dom.btnViewRendered.disabled = false;
       dom.btnViewCode.disabled     = false;
+      dom.btnEditInline.classList.remove('hidden');
       dom.codeEditor.value = '';
       await renderMarkdown('');
       setView('code', false); // go straight to code view; don't persist so next file open stays rendered
@@ -901,6 +910,7 @@ async function openFile(handle, name, listItemEl) {
     dom.btnDuplicate.classList.remove('hidden');
     dom.btnViewRendered.disabled = false;
     dom.btnViewCode.disabled     = false;
+    dom.btnEditInline.classList.remove('hidden');
     dom.codeEditor.value = content;
     dom.lineNumbers._count = null; // force rebuild on next updateLineNumbers()
 
@@ -927,9 +937,10 @@ async function renderMarkdown(content) {
     rawHtml = '<p style="color:var(--color-flame)">Error parsing Markdown: ' + escapeHtml(e.message) + '</p>';
   }
 
-  // DOMPurify: allow class attrs so highlight.js styling is preserved
+  // DOMPurify: allow class attrs (highlight.js) and the extra tags from our marked extensions
   const safeHtml = DOMPurify.sanitize(rawHtml, {
-    ADD_ATTR: ['class'],
+    ADD_ATTR:  ['class'],
+    ADD_TAGS:  ['mark', 'sup', 'sub'],
     ALLOW_DATA_ATTR: false,
   });
 
@@ -1196,6 +1207,9 @@ function updateLineNumbers() {
    VIEW TOGGLE
 ═══════════════════════════════════════════════════════════ */
 function setView(view, save = true) {
+  // Exit inline edit mode when switching views (syncs content first)
+  if (state.isInlineEditing) _exitInlineEditMode(false);
+
   if (view === state.currentView && state.currentFileHandle) {
     // Same view — just ensure line numbers are up to date
     if (view === 'code') updateLineNumbers();
@@ -1232,6 +1246,15 @@ function setView(view, save = true) {
 /* ═══════════════════════════════════════════════════════════
    EDITOR & SAVE
 ═══════════════════════════════════════════════════════════ */
+
+function _markDirty() {
+  if (!state.isDirty) {
+    state.isDirty = true;
+    dom.dirtyIndicator.classList.remove('hidden');
+    dom.btnSave.classList.remove('hidden');
+  }
+}
+
 function onEditorInput() {
   if (!state.currentFileHandle) return;
   if (!state.isDirty) {
@@ -1541,6 +1564,7 @@ async function openFileFromSearch(result, query) {
     dom.btnSave.classList.add('hidden');
     dom.btnViewRendered.disabled = false;
     dom.btnViewCode.disabled     = false;
+    dom.btnEditInline.classList.remove('hidden');
     dom.codeEditor.value = content;
     dom.lineNumbers._count = null;
 
@@ -1862,8 +1886,8 @@ function wireKeyboard() {
       return;
     }
 
-    // Undo pending delete: Ctrl/Cmd + Z
-    if (meta && e.key === 'z' && _pendingDelete) {
+    // Undo pending delete: Ctrl/Cmd + Z (skip when inline editor is focused — let browser undo text)
+    if (meta && e.key === 'z' && _pendingDelete && !state.isInlineEditing) {
       e.preventDefault();
       const undoBtn = dom.toastContainer.querySelector('.toast-undo-btn');
       if (undoBtn) undoBtn.click();
@@ -1921,6 +1945,14 @@ function wireKeyboard() {
       }
     }
 
+    // Toggle inline edit mode: Ctrl/Cmd + E
+    if (meta && e.key === 'e') {
+      e.preventDefault();
+      if (!appVisible || !state.currentFileHandle) return;
+      if (state.currentView === 'rendered') toggleInlineEdit();
+      return;
+    }
+
     // Toggle panel: Ctrl/Cmd + B
     if (meta && e.key === 'b') {
       e.preventDefault();
@@ -1937,10 +1969,14 @@ function wireKeyboard() {
       return;
     }
 
-    // Escape: close shortcuts → close move modal → close delete modal → close match nav → exit search → exit fullscreen
+    // Escape: close shortcuts → inline edit → close move modal → close delete modal → close match nav → exit search → exit fullscreen
     if (e.key === 'Escape') {
       if (!dom.shortcutsModal.classList.contains('hidden')) {
         closeHelp();
+        return;
+      }
+      if (state.isInlineEditing) {
+        _exitInlineEditMode(true);
         return;
       }
       if (!dom.moveModal.classList.contains('hidden')) {
@@ -1986,6 +2022,416 @@ function _applyOsShortcutLabels() {
 
 
 /* ═══════════════════════════════════════════════════════════
+   MARKED EXTENSIONS — highlight ==…==, subscript ~…~, superscript ^…^
+═══════════════════════════════════════════════════════════ */
+function _registerMarkedExtensions() {
+  marked.use({
+    extensions: [
+      // ==highlighted text==
+      {
+        name: 'mdHighlight',
+        level: 'inline',
+        start(src) { return src.indexOf('=='); },
+        tokenizer(src) {
+          const m = src.match(/^==([^=\n]+)==/);
+          if (m) return { type: 'mdHighlight', raw: m[0], text: m[1] };
+        },
+        renderer(token) {
+          return `<mark class="md-highlight">${token.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</mark>`;
+        },
+      },
+      // ^superscript^
+      {
+        name: 'mdSuperscript',
+        level: 'inline',
+        start(src) { return src.indexOf('^'); },
+        tokenizer(src) {
+          const m = src.match(/^\^([^\^\n]+)\^/);
+          if (m) return { type: 'mdSuperscript', raw: m[0], text: m[1] };
+        },
+        renderer(token) {
+          return `<sup>${token.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</sup>`;
+        },
+      },
+      // ~subscript~ (only single ~, not ~~strikethrough~~)
+      {
+        name: 'mdSubscript',
+        level: 'inline',
+        start(src) { return src.indexOf('~'); },
+        tokenizer(src) {
+          // Must be single ~, not double ~~ at start
+          if (src.startsWith('~~')) return;
+          const m = src.match(/^~([^~\n]+)~/);
+          if (m) return { type: 'mdSubscript', raw: m[0], text: m[1] };
+        },
+        renderer(token) {
+          return `<sub>${token.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</sub>`;
+        },
+      },
+    ],
+  });
+
+  // Allow <mark>, <sup>, <sub> through DOMPurify
+  DOMPurify.addHook('afterSanitizeAttributes', node => {
+    // no-op — these tags are allowed by DOMPurify by default
+  });
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   INLINE EDITOR (rendered-view editing mode)
+═══════════════════════════════════════════════════════════ */
+
+function initInlineEditor() {
+  // Format toolbar: use mousedown (not click) so selection isn't lost before we apply the format
+  dom.formatToolbar.addEventListener('mousedown', e => {
+    const btn = e.target.closest('.fmt-btn');
+    if (!btn) return;
+    e.preventDefault(); // prevent losing the active selection
+    applyFormat(btn.dataset.format);
+  });
+
+  // Show / hide format toolbar when selection changes
+  document.addEventListener('selectionchange', _onSelectionChange);
+
+  // Hide format toolbar when preview pane scrolls
+  dom.previewPane.addEventListener('scroll', () => hideFormatToolbar(), { passive: true });
+}
+
+function toggleInlineEdit() {
+  if (state.isInlineEditing) {
+    _exitInlineEditMode(true);
+  } else {
+    _enterInlineEditMode();
+  }
+}
+
+function _enterInlineEditMode() {
+  if (!state.currentFileHandle) return;
+  if (state.currentView !== 'rendered') return;
+  if (state.isInlineEditing) return;
+
+  state.isInlineEditing = true;
+  dom.btnEditInline.classList.add('edit-active');
+  dom.previewPane.classList.add('inline-edit-active');
+
+  // Build the editable div with raw markdown source
+  const editEl = document.createElement('div');
+  editEl.id = 'inline-editor';
+  editEl.className = 'inline-editor';
+  editEl.contentEditable = 'plaintext-only';
+  editEl.spellcheck = false;
+  editEl.setAttribute('autocorrect', 'off');
+  editEl.setAttribute('autocapitalize', 'off');
+  editEl.setAttribute('data-gramm', 'false');        // disable Grammarly
+  editEl.setAttribute('data-gramm_editor', 'false'); // disable Grammarly
+  editEl.textContent = dom.codeEditor.value;
+
+  // Clear pane and inject editable content
+  dom.previewPane.innerHTML = '';
+  dom.previewPane.appendChild(editEl);
+  editEl.focus();
+
+  // Place cursor at start
+  const range = document.createRange();
+  const sel   = window.getSelection();
+  range.setStart(editEl, 0);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  // Sync edits → code editor (mark dirty, update highlight)
+  editEl.addEventListener('input', () => {
+    const raw = editEl.innerText.replace(/ /g, ' ');
+    dom.codeEditor.value = raw;
+    _markDirty();
+    updateCodeHighlight();
+    // Update line numbers so Save knows current line count
+    dom.lineNumbers._count = null;
+    updateLineNumbers();
+  });
+
+  // Blur → exit edit mode and re-render
+  // Use a small delay so format-toolbar mousedown fires first
+  editEl.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (state.isInlineEditing) _exitInlineEditMode(true);
+    }, 120);
+  });
+}
+
+function _exitInlineEditMode(doRender = true) {
+  if (!state.isInlineEditing) return;
+  state.isInlineEditing = false;
+
+  // Sync final text before destroying the element
+  const editEl = dom.previewPane.querySelector('#inline-editor');
+  if (editEl) {
+    const raw = editEl.innerText.replace(/ /g, ' ');
+    dom.codeEditor.value = raw;
+    updateCodeHighlight();
+    dom.lineNumbers._count = null;
+    updateLineNumbers();
+  }
+
+  dom.btnEditInline.classList.remove('edit-active');
+  dom.previewPane.classList.remove('inline-edit-active');
+
+  if (doRender) {
+    renderMarkdown(dom.codeEditor.value);
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   FLOATING FORMAT TOOLBAR
+═══════════════════════════════════════════════════════════ */
+
+function _onSelectionChange() {
+  const sel = window.getSelection();
+
+  if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+    hideFormatToolbar();
+    return;
+  }
+  if (!sel.rangeCount) { hideFormatToolbar(); return; }
+
+  const range = sel.getRangeAt(0);
+  const ancestor = range.commonAncestorContainer;
+
+  // Only show over selections inside the preview pane
+  if (!dom.previewPane.contains(ancestor)) {
+    hideFormatToolbar();
+    return;
+  }
+
+  // Get the bounding rect of the selection for positioning
+  const rects = range.getClientRects();
+  if (!rects.length) { hideFormatToolbar(); return; }
+
+  // Find the topmost rect (first line of selection)
+  let topRect = rects[0];
+  for (const r of rects) {
+    if (r.top < topRect.top) topRect = r;
+  }
+
+  showFormatToolbar(topRect);
+}
+
+function showFormatToolbar(selectionRect) {
+  const tb = dom.formatToolbar;
+  tb.classList.remove('hidden');
+
+  // Force layout to measure toolbar dimensions
+  const tbRect = tb.getBoundingClientRect();
+  const tbW = tbRect.width || 420; // fallback estimate
+  const tbH = tbRect.height || 38;
+
+  const GAP = 10; // gap between toolbar bottom and selection top
+
+  let top  = selectionRect.top - tbH - GAP;
+  let left = selectionRect.left + selectionRect.width / 2;
+
+  // Don't go off-screen top
+  if (top < 8) top = selectionRect.bottom + GAP;
+
+  // Clamp horizontally
+  const margin = 8;
+  const halfTb = tbW / 2;
+  left = Math.min(window.innerWidth - halfTb - margin, Math.max(halfTb + margin, left));
+
+  tb.style.top  = top + 'px';
+  tb.style.left = left + 'px';
+}
+
+function hideFormatToolbar() {
+  dom.formatToolbar.classList.add('hidden');
+}
+
+
+/* ── Format application ──────────────────────────────────── */
+
+function getFormatMarkers(format) {
+  const map = {
+    h1:            { prefix: '# ',   suffix: '',    block: true  },
+    h2:            { prefix: '## ',  suffix: '',    block: true  },
+    h3:            { prefix: '### ', suffix: '',    block: true  },
+    bold:          { prefix: '**',   suffix: '**',  block: false },
+    italic:        { prefix: '*',    suffix: '*',   block: false },
+    strikethrough: { prefix: '~~',   suffix: '~~',  block: false },
+    blockquote:    { prefix: '> ',   suffix: '',    block: true  },
+    code:          { prefix: '`',    suffix: '`',   block: false },
+    fenced:        { prefix: '```\n',suffix: '\n```',block: false },
+    ul:            { prefix: '- ',   suffix: '',    block: true  },
+    ol:            { prefix: '1. ',  suffix: '',    block: true  },
+    highlight:     { prefix: '==',   suffix: '==',  block: false },
+    sub:           { prefix: '~',    suffix: '~',   block: false },
+    sup:           { prefix: '^',    suffix: '^',   block: false },
+  };
+  return map[format] || { prefix: '', suffix: '', block: false };
+}
+
+function applyFormat(format) {
+  const markers = getFormatMarkers(format);
+  if (state.isInlineEditing) {
+    _applyFormatToEditMode(markers);
+  } else {
+    _applyFormatToRenderedMode(markers);
+  }
+  hideFormatToolbar();
+}
+
+// ── Edit mode: apply formatting directly in the contenteditable ─────────────
+function _applyFormatToEditMode({ prefix, suffix, block }) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+
+  const selectedText = sel.toString();
+  if (!selectedText) return;
+
+  let replacement;
+  if (block) {
+    replacement = selectedText.split('\n').map(l => prefix + l).join('\n');
+  } else {
+    replacement = prefix + selectedText + suffix;
+  }
+
+  // Insert text in place of the selection
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+  const node = document.createTextNode(replacement);
+  range.insertNode(node);
+
+  // Move cursor to end of inserted text
+  range.setStartAfter(node);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  // Sync to code editor
+  const editEl = dom.previewPane.querySelector('#inline-editor');
+  if (editEl) {
+    const raw = editEl.innerText.replace(/ /g, ' ');
+    dom.codeEditor.value = raw;
+    _markDirty();
+    updateCodeHighlight();
+  }
+}
+
+// ── Rendered mode: apply formatting to markdown source, then re-render ───────
+function _applyFormatToRenderedMode({ prefix, suffix, block }) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+
+  const selectedText = sel.toString();
+  if (!selectedText.trim()) return;
+
+  const source = dom.codeEditor.value;
+  const lines  = source.split('\n');
+  let newSource;
+
+  if (block) {
+    // Use data-source-line annotations to find which source lines are selected
+    const range = sel.getRangeAt(0);
+    const lineRange = _getSelectionSourceLines(range);
+    if (!lineRange) {
+      showToast('Could not map selection to source. Switch to Code view to format manually.', 'warning', 4000);
+      return;
+    }
+    const { startLine, endLine } = lineRange;
+    _toggleBlockFormat(lines, prefix, startLine, endLine);
+    newSource = lines.join('\n');
+  } else {
+    // Inline format: search for selected text in source
+    newSource = _applyInlineFormat(source, selectedText, prefix, suffix);
+    if (newSource === null) {
+      showToast('Could not locate selection in source. Switch to Code view to format manually.', 'warning', 4000);
+      return;
+    }
+  }
+
+  dom.codeEditor.value = newSource;
+  _markDirty();
+  updateCodeHighlight();
+  renderMarkdown(newSource);
+}
+
+// Find the source line range [startLine, endLine] (0-based) for the current selection.
+// Uses data-source-line stamps placed by annotateRenderedBlocks().
+function _getSelectionSourceLines(range) {
+  // Walk up from a node to find the direct child of previewPane with data-source-line
+  function findSourceBlock(node) {
+    let el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    while (el && el.parentElement !== dom.previewPane) {
+      el = el.parentElement;
+    }
+    return (el && el !== dom.previewPane && el.dataset?.sourceLine) ? el : null;
+  }
+
+  const startBlock = findSourceBlock(range.startContainer);
+  const endBlock   = findSourceBlock(range.endContainer) || startBlock;
+  if (!startBlock) return null;
+
+  const startLine = parseInt(startBlock.dataset.sourceLine, 10) - 1; // 0-based
+
+  // End line: last line of the endBlock = (next sibling's start line - 2), or last line
+  const totalLines = dom.codeEditor.value.split('\n').length;
+  let endLine;
+  const nextSib = endBlock?.nextElementSibling;
+  if (nextSib?.dataset?.sourceLine) {
+    endLine = parseInt(nextSib.dataset.sourceLine, 10) - 2;
+  } else {
+    endLine = totalLines - 1;
+  }
+
+  return { startLine, endLine: Math.max(startLine, endLine) };
+}
+
+// Toggle a block-level prefix (e.g. '# ', '> ', '- ') on lines[startLine..endLine].
+function _toggleBlockFormat(lines, prefix, startLine, endLine) {
+  const allHave = lines
+    .slice(startLine, endLine + 1)
+    .every(l => l.startsWith(prefix));
+
+  for (let i = startLine; i <= Math.min(endLine, lines.length - 1); i++) {
+    lines[i] = allHave
+      ? lines[i].slice(prefix.length)
+      : prefix + lines[i];
+  }
+}
+
+// Find `selectedText` in `source` and wrap it with prefix/suffix. Returns null if not found.
+// Toggles: if already wrapped, removes the markers instead.
+function _applyInlineFormat(source, selectedText, prefix, suffix) {
+  const idx = source.indexOf(selectedText);
+  if (idx === -1) return null;
+
+  // Toggle check: is the selection already wrapped?
+  if (prefix && suffix) {
+    const beforeOk = idx >= prefix.length &&
+      source.slice(idx - prefix.length, idx) === prefix;
+    const afterOk  = source.slice(idx + selectedText.length,
+      idx + selectedText.length + suffix.length) === suffix;
+    if (beforeOk && afterOk) {
+      // Remove markers
+      return (
+        source.slice(0, idx - prefix.length) +
+        selectedText +
+        source.slice(idx + selectedText.length + suffix.length)
+      );
+    }
+  }
+
+  // Wrap
+  return (
+    source.slice(0, idx) +
+    prefix + selectedText + suffix +
+    source.slice(idx + selectedText.length)
+  );
+}
+
+
+/* ═══════════════════════════════════════════════════════════
    EVENT WIRING
 ═══════════════════════════════════════════════════════════ */
 function wireEvents() {
@@ -2015,6 +2461,7 @@ function wireEvents() {
     _dragState = null;
     requestMoveEntry(ds, parent.handle, parent.name);
   });
+  dom.btnEditInline.addEventListener('click', toggleInlineEdit);
   dom.btnDuplicate.addEventListener('click', duplicateFile);
   dom.btnViewRendered.addEventListener('click', () => setView('rendered'));
   dom.btnViewCode.addEventListener('click', () => setView('code'));

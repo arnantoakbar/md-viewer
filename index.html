@@ -190,6 +190,12 @@
           </div>
 
           <div class="toolbar-right">
+            <button id="btn-edit-inline" class="icon-btn hidden" title="Toggle inline editing (⌘E)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
             <button id="btn-duplicate" class="icon-btn hidden" title="Duplicate file">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -368,6 +374,10 @@
         <div class="shortcut-group">
           <div class="shortcut-group-label">View</div>
           <div class="shortcut-row">
+            <span class="shortcut-desc">Toggle inline editing</span>
+            <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>E</kbd></div>
+          </div>
+          <div class="shortcut-row">
             <span class="shortcut-desc">Toggle file browser</span>
             <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>B</kbd></div>
           </div>
@@ -409,6 +419,36 @@
       </div>
 
     </div>
+  </div>
+
+  <!-- FLOATING FORMAT TOOLBAR (appears above text selection in preview) -->
+  <div id="format-toolbar" class="format-toolbar hidden" role="toolbar" aria-label="Text formatting">
+    <button class="fmt-btn fmt-heading" data-format="h1" title="Heading 1">H1</button>
+    <button class="fmt-btn fmt-heading" data-format="h2" title="Heading 2">H2</button>
+    <button class="fmt-btn fmt-heading" data-format="h3" title="Heading 3">H3</button>
+    <span class="fmt-sep" aria-hidden="true"></span>
+    <button class="fmt-btn" data-format="bold" title="Bold"><b>B</b></button>
+    <button class="fmt-btn fmt-italic-btn" data-format="italic" title="Italic"><i>I</i></button>
+    <button class="fmt-btn fmt-strike-btn" data-format="strikethrough" title="Strikethrough"><s>S</s></button>
+    <span class="fmt-sep" aria-hidden="true"></span>
+    <button class="fmt-btn" data-format="blockquote" title="Blockquote">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/></svg>
+    </button>
+    <button class="fmt-btn fmt-mono-btn" data-format="code" title="Inline code"><code>`</code></button>
+    <button class="fmt-btn fmt-mono-btn" data-format="fenced" title="Code block">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+    </button>
+    <span class="fmt-sep" aria-hidden="true"></span>
+    <button class="fmt-btn" data-format="ul" title="Unordered list">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <button class="fmt-btn" data-format="ol" title="Ordered list">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4" stroke-width="2"/><path d="M4 10h2" stroke-width="2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1" stroke-width="2"/></svg>
+    </button>
+    <span class="fmt-sep" aria-hidden="true"></span>
+    <button class="fmt-btn fmt-highlight-btn" data-format="highlight" title="Highlight (==text==)">Mark</button>
+    <button class="fmt-btn" data-format="sub" title="Subscript (~text~)">X<sub>2</sub></button>
+    <button class="fmt-btn" data-format="sup" title="Superscript (^text^)">X<sup>2</sup></button>
   </div>
 
   <!-- CDN Libraries -->
