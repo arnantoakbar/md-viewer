@@ -39,7 +39,7 @@ let _pendingMove = null; // { handle, name, kind, srcDirHandle, destDirHandle, d
 
 // Live edit split-view
 let _liveEditDivider  = null; // the drag handle element between preview and code pane
-let _liveEditCodeH    = 240;  // current height of code pane in live edit mode (px)
+let _liveEditCodeW    = 380;  // current width of code pane in side-by-side split (px)
 let _liveRenderTimer  = null; // debounce timer for real-time re-render
 
 
@@ -356,7 +356,8 @@ function clearActiveFile() {
   dom.btnDuplicate.classList.add('hidden');
   dom.btnEditInline.classList.add('hidden');
 
-  // Reset rendered pane to empty state
+  // Reset rendered pane to empty state (not editable when no file open)
+  dom.previewPane.contentEditable = 'false';
   dom.previewEmpty.classList.remove('hidden');
   dom.previewPane.innerHTML = '';
   dom.previewPane.appendChild(dom.previewEmpty);
@@ -432,8 +433,8 @@ async function createNewFile() {
       setView('rendered', false); // stay in rendered view; don't persist
       updateLineNumbers();
       updateCodeHighlight();
-      // Auto-activate inline edit mode so the cursor is ready immediately
-      _enterInlineEditMode();
+      // Preview pane is now contenteditable — focus it so user can start typing immediately
+      dom.previewPane.focus();
     }
   } catch (err) {
     showToast('Could not create file: ' + err.message, 'error');
@@ -929,7 +930,7 @@ async function openFile(handle, name, listItemEl) {
   }
 }
 
-async function renderMarkdown(content) {
+async function renderMarkdown(content, { preserveScroll = false } = {}) {
   marked.setOptions({
     breaks: true,
     gfm: true,
@@ -961,13 +962,16 @@ async function renderMarkdown(content) {
     block.closest('pre').dataset.lang = lang;
   });
 
-  // Render Mermaid diagrams
+  // Render Mermaid diagrams (store original source for domToMarkdown round-trip)
   await renderMermaidBlocks();
 
   // Stamp each block with its source line so scroll sync can find it
   annotateRenderedBlocks(content);
 
-  dom.previewPane.scrollTop = 0;
+  // Apply contenteditable state and mark non-editable islands (code blocks, mermaid)
+  _setupEditablePane();
+
+  if (!preserveScroll) dom.previewPane.scrollTop = 0;
 }
 
 async function renderMermaidBlocks() {
@@ -982,6 +986,7 @@ async function renderMermaidBlocks() {
       const wrapper = document.createElement('div');
       wrapper.className = 'mermaid-diagram';
       wrapper.innerHTML = svg;
+      wrapper.dataset.mermaidSource = definition; // stored for domToMarkdown round-trip
       pre.replaceWith(wrapper);
     } catch (err) {
       const errDiv = document.createElement('div');
@@ -1234,6 +1239,11 @@ function setView(view, save = true) {
   dom.codePane.classList.toggle('hidden',    isRendered);
   dom.btnViewRendered.classList.toggle('active',  isRendered);
   dom.btnViewCode.classList.toggle('active',     !isRendered);
+
+  // Update contentEditable: rendered view = editable; code view = not
+  if (state.currentFileHandle) {
+    dom.previewPane.contentEditable = isRendered ? 'true' : 'false';
+  }
 
   if (state.currentFileHandle) {
     if (isRendered) {
@@ -1897,7 +1907,7 @@ function wireKeyboard() {
     }
 
     // Undo pending delete: Ctrl/Cmd + Z (skip when inline editor is focused — let browser undo text)
-    if (meta && e.key === 'z' && _pendingDelete && !state.isInlineEditing) {
+    if (meta && e.key === 'z' && _pendingDelete && !dom.previewPane.contains(document.activeElement)) {
       e.preventDefault();
       const undoBtn = dom.toastContainer.querySelector('.toast-undo-btn');
       if (undoBtn) undoBtn.click();
@@ -2089,7 +2099,216 @@ function _registerMarkedExtensions() {
 
 
 /* ═══════════════════════════════════════════════════════════
-   INLINE EDITOR (rendered-view editing mode)
+   DOM → MARKDOWN CONVERSION
+   Used to derive the markdown source from the rendered HTML
+   when the user types directly in the contenteditable preview.
+═══════════════════════════════════════════════════════════ */
+
+function domToMarkdown(el) {
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const tag = node.tagName.toLowerCase();
+    const ch  = () => [...node.childNodes].map(walk).join('');
+
+    // Non-editable islands carry their original source in data attributes
+    if (node.classList.contains('mermaid-diagram')) {
+      return '\n```mermaid\n' + (node.dataset.mermaidSource || '').trim() + '\n```\n\n';
+    }
+    if (node.classList.contains('mermaid-error')) return '';
+
+    switch (tag) {
+      case 'h1': return '\n# '      + ch().trim() + '\n\n';
+      case 'h2': return '\n## '     + ch().trim() + '\n\n';
+      case 'h3': return '\n### '    + ch().trim() + '\n\n';
+      case 'h4': return '\n#### '   + ch().trim() + '\n\n';
+      case 'h5': return '\n##### '  + ch().trim() + '\n\n';
+      case 'h6': return '\n###### ' + ch().trim() + '\n\n';
+      case 'p': {
+        const c = ch().trim();
+        return c ? '\n' + c + '\n\n' : '\n\n';
+      }
+      case 'strong': case 'b':   return '**' + ch() + '**';
+      case 'em':     case 'i':   return '*'  + ch() + '*';
+      case 's':      case 'del': return '~~' + ch() + '~~';
+      case 'mark':               return '==' + ch() + '==';
+      case 'sub':                return '~'  + ch() + '~';
+      case 'sup':                return '^'  + ch() + '^';
+      case 'code': {
+        if (node.closest('pre')) return node.textContent; // inside pre: raw text only
+        return '`' + node.textContent + '`';
+      }
+      case 'pre': {
+        const code = node.querySelector('code');
+        const raw  = code ? code.textContent : node.textContent;
+        const lang = (code?.className?.match(/language-(\w+)/)?.[1] ?? '').replace('language-','');
+        return '\n```' + lang + '\n' + raw.trimEnd() + '\n```\n\n';
+      }
+      case 'blockquote': {
+        const inner = ch().trim();
+        return '\n' + inner.split('\n').map(l => '> ' + l).join('\n') + '\n\n';
+      }
+      case 'ul': {
+        const items = [...node.children].filter(c => c.tagName.toLowerCase() === 'li');
+        return '\n' + items.map(li =>
+          '- ' + [...li.childNodes].map(walk).join('').trim()
+        ).join('\n') + '\n\n';
+      }
+      case 'ol': {
+        const items = [...node.children].filter(c => c.tagName.toLowerCase() === 'li');
+        return '\n' + items.map((li, i) =>
+          (i + 1) + '. ' + [...li.childNodes].map(walk).join('').trim()
+        ).join('\n') + '\n\n';
+      }
+      case 'li':  return ch(); // handled by ul/ol
+      case 'hr':  return '\n---\n\n';
+      case 'br':  return '\n';
+      case 'a': {
+        const href  = node.getAttribute('href') || '';
+        const title = node.getAttribute('title');
+        return '[' + ch() + '](' + href + (title ? ` "${title}"` : '') + ')';
+      }
+      case 'img': return '![' + (node.alt || '') + '](' + (node.getAttribute('src') || '') + ')';
+      case 'table': {
+        const rows = [...node.querySelectorAll('tr')];
+        if (!rows.length) return '';
+        const hdrs = [...rows[0].querySelectorAll('th,td')].map(
+          c => [...c.childNodes].map(walk).join('').trim()
+        );
+        const sep  = hdrs.map(() => '---');
+        const body = rows.slice(1).map(r =>
+          [...r.querySelectorAll('td')].map(c => [...c.childNodes].map(walk).join('').trim())
+        );
+        const toRow = cells => '| ' + cells.join(' | ') + ' |';
+        return '\n' + [toRow(hdrs), toRow(sep), ...body.map(toRow)].join('\n') + '\n\n';
+      }
+      default: return ch();
+    }
+  }
+  return walk(el).replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').trim() + '\n';
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   CURSOR SAVE / RESTORE (for after live re-render)
+═══════════════════════════════════════════════════════════ */
+
+// Return the plain text content from the cursor to the end of `el`.
+// Used as an anchor to restore cursor position after innerHTML is replaced.
+function _saveCursorAfter(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  try {
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.startContainer)) return null;
+    const after = document.createRange();
+    after.setStart(range.startContainer, range.startOffset);
+    after.setEnd(el, el.childNodes.length);
+    return after.toString();
+  } catch (_) { return null; }
+}
+
+// Restore cursor to the position where `textAfter` starts in the new DOM content.
+// Collapses whitespace for comparison so structural newlines don't throw off the offset.
+function _restoreCursorAfter(el, textAfter) {
+  if (textAfter === null) return;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes  = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const fullText = nodes.map(n => n.textContent).join('');
+
+  const norm = s => s.replace(/[\n\r\s]+/g, ' ');
+  const nFull  = norm(fullText);
+  const nAfter = norm(textAfter);
+
+  let targetPos;
+  if (!nAfter.trim()) {
+    targetPos = fullText.length;
+  } else {
+    const nTarget = nFull.length - nAfter.length;
+    if (nTarget < 0) { targetPos = fullText.length; }
+    else {
+      // Map the normalised offset back to actual text position
+      let nPos = 0, aPos = 0;
+      for (let i = 0; i < fullText.length; i++) {
+        if (nPos >= nTarget) break;
+        nPos += norm(fullText[i]).length;
+        aPos = i + 1;
+      }
+      targetPos = aPos;
+    }
+  }
+
+  let rem = targetPos;
+  for (const node of nodes) {
+    if (rem <= node.textContent.length) {
+      try {
+        const r = document.createRange();
+        r.setStart(node, rem);
+        r.collapse(true);
+        const s = window.getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+      } catch (_) {}
+      return;
+    }
+    rem -= node.textContent.length;
+  }
+  // Fallback: end of content
+  const last = nodes[nodes.length - 1];
+  if (last) {
+    try {
+      const r = document.createRange();
+      r.setStart(last, last.textContent.length);
+      r.collapse(true);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(r);
+    } catch (_) {}
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   PREVIEW PANE INPUT HANDLER
+   Called whenever the user types in the contenteditable preview.
+═══════════════════════════════════════════════════════════ */
+
+function _onPreviewInput() {
+  if (!state.currentFileHandle) return;
+  // Extract markdown from current rendered HTML and push to code editor
+  const markdown = domToMarkdown(dom.previewPane);
+  dom.codeEditor.value = markdown;
+  _markDirty();
+  updateLineNumbers();
+  updateCodeHighlight();
+
+  // Debounced re-render: parse markdown → update preview HTML → restore cursor
+  clearTimeout(_liveRenderTimer);
+  _liveRenderTimer = setTimeout(async () => {
+    const textAfter = _saveCursorAfter(dom.previewPane);
+    const scrollTop = dom.previewPane.scrollTop;
+    await renderMarkdown(markdown, { preserveScroll: true });
+    dom.previewPane.scrollTop = scrollTop;
+    _restoreCursorAfter(dom.previewPane, textAfter);
+    dom.previewPane.focus();
+  }, 300);
+}
+
+// Apply contenteditable state and mark non-editable islands.
+// Called at the end of renderMarkdown when a file is open in rendered view.
+function _setupEditablePane() {
+  const editable = !!(state.currentFileHandle && state.currentView === 'rendered');
+  dom.previewPane.contentEditable = editable ? 'true' : 'false';
+  if (!editable) return;
+  // Prevent accidental editing inside code blocks and Mermaid diagrams
+  dom.previewPane.querySelectorAll('pre, .mermaid-diagram, .mermaid-error').forEach(el => {
+    el.contentEditable = 'false';
+  });
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   SPLIT-VIEW TOGGLE (⌘E)
 ═══════════════════════════════════════════════════════════ */
 
 function initInlineEditor() {
@@ -2107,23 +2326,23 @@ function initInlineEditor() {
   // Hide format toolbar when preview pane scrolls
   dom.previewPane.addEventListener('scroll', () => hideFormatToolbar(), { passive: true });
 
-  // Click in rendered preview:
-  //   • If not yet in edit mode → enter live edit mode (shows split view)
-  //   • If already in edit mode → scroll the code editor to the clicked source line
-  dom.previewPane.addEventListener('click', e => {
-    if (!state.currentFileHandle) return;
-    if (state.currentView !== 'rendered') return;
-    if (e.target.closest('a, button, .mermaid-diagram, pre, #preview-empty')) return;
-    // Don't activate if the user just finished making a text selection
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed) return;
+  // Live input: user types in the contenteditable preview → sync to code editor + debounce render
+  dom.previewPane.addEventListener('input', _onPreviewInput);
 
-    if (state.isInlineEditing) {
-      // Already in live edit mode: try to sync code editor to the clicked source line
-      _syncCodeEditorToClick(e.clientX, e.clientY);
-    } else {
-      _enterInlineEditMode(e.clientX, e.clientY);
-    }
+  // Click in rendered preview while split view is open → sync code editor to that line
+  dom.previewPane.addEventListener('click', e => {
+    if (!state.currentFileHandle || !state.isInlineEditing) return;
+    if (e.target.closest('a, button, .mermaid-diagram, pre, #preview-empty')) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return; // selection drag, not a simple click
+    _syncCodeEditorToClick(e.clientX, e.clientY);
+  });
+
+  // Tab inside the preview: insert a tab character instead of moving focus
+  dom.previewPane.addEventListener('keydown', e => {
+    if (e.key !== 'Tab' || !state.currentFileHandle) return;
+    e.preventDefault();
+    document.execCommand('insertText', false, '\t');
   });
 }
 
@@ -2135,8 +2354,7 @@ function toggleInlineEdit() {
   }
 }
 
-// Enter live-edit split-view mode.
-// clickX/clickY: optional viewport coords — used to scroll the code editor to the clicked line.
+// Toggle the side-by-side split view (⌘E or edit button).
 function _enterInlineEditMode(clickX, clickY) {
   if (!state.currentFileHandle) return;
   if (state.currentView !== 'rendered') return;
@@ -2145,8 +2363,8 @@ function _enterInlineEditMode(clickX, clickY) {
   state.isInlineEditing = true;
   dom.btnEditInline.classList.add('edit-active');
 
-  // Show the split view: set CSS variable then add class
-  dom.panelRight.style.setProperty('--live-code-h', _liveEditCodeH + 'px');
+  // Show the side-by-side split: preview on left, code editor on right
+  dom.panelRight.style.setProperty('--live-code-w', _liveEditCodeW + 'px');
   dom.panelRight.classList.add('live-edit-mode');
   dom.codePane.classList.remove('hidden');
 
@@ -2166,23 +2384,23 @@ function _enterInlineEditMode(clickX, clickY) {
   }
 }
 
-// Initialise the vertical resize handle between preview and code pane.
+// Initialise the horizontal resize handle between preview (left) and code pane (right).
 function _initLiveEditResize() {
-  let startY, startH;
+  let startX, startW;
   _liveEditDivider.addEventListener('mousedown', e => {
     e.preventDefault();
-    startY = e.clientY;
-    startH = dom.codePane.offsetHeight;
+    startX = e.clientX;
+    startW = dom.codePane.offsetWidth;
     _liveEditDivider.classList.add('dragging');
     document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'row-resize';
+    document.body.style.cursor = 'col-resize';
 
     const onMove = mv => {
-      const delta  = startY - mv.clientY; // drag up → taller code pane
-      const panelH = dom.panelRight.offsetHeight;
-      const newH   = Math.min(Math.max(80, startH + delta), Math.floor(panelH * 0.8));
-      _liveEditCodeH = newH;
-      dom.panelRight.style.setProperty('--live-code-h', newH + 'px');
+      const delta  = startX - mv.clientX; // drag left → wider code pane
+      const panelW = dom.panelRight.offsetWidth;
+      const newW   = Math.min(Math.max(120, startW + delta), Math.floor(panelW * 0.8));
+      _liveEditCodeW = newW;
+      dom.panelRight.style.setProperty('--live-code-w', newW + 'px');
     };
     const onUp = () => {
       _liveEditDivider.classList.remove('dragging');
@@ -2500,7 +2718,12 @@ function _applyFormatToRenderedMode({ prefix, suffix, block }) {
   dom.codeEditor.value = newSource;
   _markDirty();
   updateCodeHighlight();
-  renderMarkdown(newSource);
+  // Re-render and restore scroll position (cursor restoration isn't needed here
+  // since the selection is intentionally cleared after applying a format)
+  const scrollTop = dom.previewPane.scrollTop;
+  renderMarkdown(newSource, { preserveScroll: true }).then(() => {
+    dom.previewPane.scrollTop = scrollTop;
+  });
 }
 
 // Find the source line range [startLine, endLine] (0-based) for the current selection.

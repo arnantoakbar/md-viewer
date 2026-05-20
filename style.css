@@ -1891,38 +1891,42 @@ kbd {
   color: var(--color-flame);
 }
 
-/* ── Live edit split view ─────────────────────────────────────
-   When Edit mode (⌘E) is active the right panel shows:
-   ┌─────────────────────┐  ← rendered preview (flex:1, live)
-   ├─────────────────────┤  ← drag handle
-   └─────────────────────┘  ← code editor (fixed height, resizable)
+/* ── Side-by-side split view (⌘E toggle) ───────────────────────
+   Preview on the left (editable), code editor on the right.
+   ┌──────────────────┬───┬──────────────────┐
+   │  Rendered preview│ ↔ │  Code editor      │
+   │  (contenteditable│   │  (raw markdown)   │
+   └──────────────────┴───┴──────────────────┘
 ─────────────────────────────────────────────────────────────── */
-.panel-right.live-edit-mode .view-toggle {
-  visibility: hidden; /* keep layout space, just hide buttons */
+.panel-right.live-edit-mode {
+  flex-direction: row; /* override default column layout */
 }
 
 .panel-right.live-edit-mode .preview-pane {
   flex: 1 1 0;
-  min-height: 80px;
+  min-width: 180px;
+  height: 100%;
 }
 
 .panel-right.live-edit-mode .code-pane {
   display: flex !important; /* override .hidden */
-  flex: 0 0 var(--live-code-h, 240px);
-  min-height: 80px;
-  border-top: 1px solid rgba(255,255,255,0.06); /* matches editor's dark top edge */
+  flex: 0 0 var(--live-code-w, 380px);
+  min-width: 120px;
+  height: 100%;
+  border-left: 1px solid rgba(255,255,255,0.06);
+  border-top: none;
 }
 
-/* Drag handle between preview and code pane */
+/* Vertical drag handle between preview and code pane */
 .live-edit-divider {
-  display: none; /* hidden until live-edit mode is active */
+  display: none; /* hidden unless split view is active */
   flex-shrink: 0;
-  height: 6px;
+  width: 5px;
+  height: 100%;
   background: transparent;
-  cursor: row-resize;
+  cursor: col-resize;
   position: relative;
   z-index: 10;
-  transition: background 0.15s;
 }
 .panel-right.live-edit-mode .live-edit-divider {
   display: block;
@@ -1930,7 +1934,7 @@ kbd {
 .live-edit-divider::after {
   content: '';
   position: absolute;
-  inset: 2px 0;
+  inset: 0 2px;
   border-radius: 2px;
   background: transparent;
   transition: background 0.15s;
@@ -1939,6 +1943,20 @@ kbd {
 .live-edit-divider.dragging::after {
   background: var(--color-flame);
   opacity: 0.5;
+}
+
+/* Preview pane when directly editable (always-on WYSIWYG editing) */
+.preview-pane[contenteditable="true"] {
+  cursor: text;
+  outline: none;
+  caret-color: var(--color-flame);
+}
+/* Code blocks and Mermaid diagrams are non-editable islands */
+.preview-pane[contenteditable="true"] pre,
+.preview-pane[contenteditable="true"] .mermaid-diagram,
+.preview-pane[contenteditable="true"] .mermaid-error {
+  cursor: default;
+  user-select: text; /* still selectable for copy */
 }
 
 
