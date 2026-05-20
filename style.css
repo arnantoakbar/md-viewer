@@ -1891,43 +1891,55 @@ kbd {
   color: var(--color-flame);
 }
 
-/* Preview pane in inline-edit mode */
-.preview-pane.inline-edit-active {
-  background: #FFFCF8;
-  cursor: text;
+/* ── Live edit split view ─────────────────────────────────────
+   When Edit mode (⌘E) is active the right panel shows:
+   ┌─────────────────────┐  ← rendered preview (flex:1, live)
+   ├─────────────────────┤  ← drag handle
+   └─────────────────────┘  ← code editor (fixed height, resizable)
+─────────────────────────────────────────────────────────────── */
+.panel-right.live-edit-mode .view-toggle {
+  visibility: hidden; /* keep layout space, just hide buttons */
 }
 
-/* The contenteditable element inside the preview pane during edit mode */
-.inline-editor {
-  font-family: var(--font-mono);
-  font-size: 13.5px;
-  line-height: 1.75;
-  color: var(--color-charcoal);
-  white-space: pre-wrap;
-  word-break: break-word;
-  min-height: 100%;
-  outline: none;
-  padding: var(--s8) var(--s10);
-  max-width: 860px;
-  margin: 0 auto;
-  caret-color: var(--color-flame);
+.panel-right.live-edit-mode .preview-pane {
+  flex: 1 1 0;
+  min-height: 80px;
 }
 
-/* Edit mode notice bar */
-.inline-edit-notice {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  padding: var(--s2) var(--s4);
-  background: var(--flame-tint-xs);
-  border-bottom: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--color-mid);
+.panel-right.live-edit-mode .code-pane {
+  display: flex !important; /* override .hidden */
+  flex: 0 0 var(--live-code-h, 240px);
+  min-height: 80px;
+  border-top: 1px solid rgba(255,255,255,0.06); /* matches editor's dark top edge */
+}
+
+/* Drag handle between preview and code pane */
+.live-edit-divider {
+  display: none; /* hidden until live-edit mode is active */
   flex-shrink: 0;
-  user-select: none;
+  height: 6px;
+  background: transparent;
+  cursor: row-resize;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s;
 }
-.inline-edit-notice svg { flex-shrink: 0; }
-.inline-edit-notice strong { color: var(--color-flame); }
+.panel-right.live-edit-mode .live-edit-divider {
+  display: block;
+}
+.live-edit-divider::after {
+  content: '';
+  position: absolute;
+  inset: 2px 0;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.live-edit-divider:hover::after,
+.live-edit-divider.dragging::after {
+  background: var(--color-flame);
+  opacity: 0.5;
+}
 
 
 /* ═══════════════════════════════════════════════════════════

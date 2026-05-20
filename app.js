@@ -37,6 +37,11 @@ let _pendingDelete = null; // { name, handle, kind, dirHandle, listItemEl, timer
 let _dragState   = null; // { handle, name, kind, srcDirHandle, listItemEl }
 let _pendingMove = null; // { handle, name, kind, srcDirHandle, destDirHandle, destDirName, listItemEl }
 
+// Live edit split-view
+let _liveEditDivider  = null; // the drag handle element between preview and code pane
+let _liveEditCodeH    = 240;  // current height of code pane in live edit mode (px)
+let _liveRenderTimer  = null; // debounce timer for real-time re-render
+
 
 /* ═══════════════════════════════════════════════════════════
    DOM REFERENCES
@@ -51,7 +56,7 @@ function cacheDom() {
     'btn-new-file', 'btn-new-folder', 'btn-duplicate', 'btn-edit-inline',
     'btn-save', 'btn-fullscreen', 'icon-fullscreen',
     'format-toolbar',
-    'panel-left', 'resize-handle', 'panel-right',
+    'panel-left', 'resize-handle', 'panel-right', 'preview-toolbar',
     'file-list', 'file-list-empty', 'current-dir-name',
     'breadcrumb',
     'preview-pane', 'preview-empty', 'code-pane', 'code-editor', 'code-highlight', 'line-numbers',
@@ -1207,11 +1212,12 @@ function updateLineNumbers() {
    VIEW TOGGLE
 ═══════════════════════════════════════════════════════════ */
 function setView(view, save = true) {
-  // Exit inline edit mode when switching views (syncs content first)
+  // Exit inline edit (split-view) mode when switching views
+  const wasLiveEditing = state.isInlineEditing;
   if (state.isInlineEditing) _exitInlineEditMode(false);
 
-  if (view === state.currentView && state.currentFileHandle) {
-    // Same view — just ensure line numbers are up to date
+  if (view === state.currentView && state.currentFileHandle && !wasLiveEditing) {
+    // Same view and not exiting live-edit — just keep line numbers up to date
     if (view === 'code') updateLineNumbers();
     return;
   }
@@ -1257,13 +1263,17 @@ function _markDirty() {
 
 function onEditorInput() {
   if (!state.currentFileHandle) return;
-  if (!state.isDirty) {
-    state.isDirty = true;
-    dom.dirtyIndicator.classList.remove('hidden');
-    dom.btnSave.classList.remove('hidden');
-  }
+  _markDirty();
   updateLineNumbers();
   updateCodeHighlight();
+
+  // Live preview: re-render markdown while the split-view edit mode is active
+  if (state.isInlineEditing) {
+    clearTimeout(_liveRenderTimer);
+    _liveRenderTimer = setTimeout(() => {
+      renderMarkdown(dom.codeEditor.value);
+    }, 250);
+  }
 }
 
 async function saveFile() {
@@ -2097,17 +2107,23 @@ function initInlineEditor() {
   // Hide format toolbar when preview pane scrolls
   dom.previewPane.addEventListener('scroll', () => hideFormatToolbar(), { passive: true });
 
-  // Click anywhere in the rendered preview (not on links/code/diagrams) → enter inline edit mode.
-  // Only fires on a simple click (no selection drag).
+  // Click in rendered preview:
+  //   • If not yet in edit mode → enter live edit mode (shows split view)
+  //   • If already in edit mode → scroll the code editor to the clicked source line
   dom.previewPane.addEventListener('click', e => {
     if (!state.currentFileHandle) return;
     if (state.currentView !== 'rendered') return;
-    if (state.isInlineEditing) return;
     if (e.target.closest('a, button, .mermaid-diagram, pre, #preview-empty')) return;
     // Don't activate if the user just finished making a text selection
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed) return;
-    _enterInlineEditMode(e.clientX, e.clientY);
+
+    if (state.isInlineEditing) {
+      // Already in live edit mode: try to sync code editor to the clicked source line
+      _syncCodeEditorToClick(e.clientX, e.clientY);
+    } else {
+      _enterInlineEditMode(e.clientX, e.clientY);
+    }
   });
 }
 
@@ -2119,7 +2135,8 @@ function toggleInlineEdit() {
   }
 }
 
-// clickX/clickY: optional viewport coords used to position cursor near the click point.
+// Enter live-edit split-view mode.
+// clickX/clickY: optional viewport coords — used to scroll the code editor to the clicked line.
 function _enterInlineEditMode(clickX, clickY) {
   if (!state.currentFileHandle) return;
   if (state.currentView !== 'rendered') return;
@@ -2127,115 +2144,93 @@ function _enterInlineEditMode(clickX, clickY) {
 
   state.isInlineEditing = true;
   dom.btnEditInline.classList.add('edit-active');
-  dom.previewPane.classList.add('inline-edit-active');
 
-  // Build the editable element showing raw markdown source.
-  // Use contenteditable="true" for maximum compat — backspace, delete, arrows all work.
-  const editEl = document.createElement('div');
-  editEl.id = 'inline-editor';
-  editEl.className = 'inline-editor';
-  editEl.contentEditable = 'true';
-  editEl.spellcheck = false;
-  editEl.setAttribute('autocorrect', 'off');
-  editEl.setAttribute('autocapitalize', 'off');
-  editEl.setAttribute('data-gramm', 'false');
-  editEl.setAttribute('data-gramm_editor', 'false');
-  editEl.textContent = dom.codeEditor.value;
+  // Show the split view: set CSS variable then add class
+  dom.panelRight.style.setProperty('--live-code-h', _liveEditCodeH + 'px');
+  dom.panelRight.classList.add('live-edit-mode');
+  dom.codePane.classList.remove('hidden');
 
-  dom.previewPane.innerHTML = '';
-  dom.previewPane.appendChild(editEl);
-  editEl.focus();
-
-  // Override Enter: insert plain \n instead of browser-default <div>/<br>
-  editEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const s = window.getSelection();
-      if (!s.rangeCount) return;
-      const r = s.getRangeAt(0);
-      r.deleteContents();
-      const nl = document.createTextNode('\n');
-      r.insertNode(nl);
-      r.setStartAfter(nl);
-      r.collapse(true);
-      s.removeAllRanges();
-      s.addRange(r);
-      editEl.dispatchEvent(new Event('input', { bubbles: true }));
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      _exitInlineEditMode(true);
-    }
-  });
-
-  // Strip rich formatting from pasted content
-  editEl.addEventListener('paste', e => {
-    e.preventDefault();
-    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-    const s = window.getSelection();
-    if (!s.rangeCount) return;
-    const r = s.getRangeAt(0);
-    r.deleteContents();
-    const node = document.createTextNode(text);
-    r.insertNode(node);
-    r.setStartAfter(node);
-    r.collapse(true);
-    s.removeAllRanges();
-    s.addRange(r);
-    editEl.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-
-  // Sync every edit to the code editor
-  editEl.addEventListener('input', () => {
-    dom.codeEditor.value = _getInlineContent(editEl);
-    _markDirty();
-    updateCodeHighlight();
-    dom.lineNumbers._count = null;
-    updateLineNumbers();
-  });
-
-  // Blur -> exit edit mode. Delay so format-toolbar mousedown can preventDefault first.
-  editEl.addEventListener('blur', () => {
-    setTimeout(() => {
-      if (state.isInlineEditing && document.activeElement !== editEl) {
-        _exitInlineEditMode(true);
-      }
-    }, 150);
-  });
-
-  // Position cursor: prefer the clicked point, fall back to content start
-  if (clickX !== undefined && clickY !== undefined) {
-    requestAnimationFrame(() => {
-      try {
-        const targetRange = document.caretRangeFromPoint?.(clickX, clickY) ?? null;
-        if (targetRange && editEl.contains(targetRange.startContainer)) {
-          const s = window.getSelection();
-          s.removeAllRanges();
-          s.addRange(targetRange);
-        } else {
-          _placeCursorAt(editEl, 0);
-        }
-      } catch (_) { _placeCursorAt(editEl, 0); }
-    });
-  } else {
-    _placeCursorAt(editEl, 0);
+  // Create the drag divider between preview and code pane (only once)
+  if (!_liveEditDivider) {
+    _liveEditDivider = document.createElement('div');
+    _liveEditDivider.className = 'live-edit-divider';
+    // Insert between preview-pane and code-pane
+    dom.previewPane.insertAdjacentElement('afterend', _liveEditDivider);
+    _initLiveEditResize();
   }
+
+  // Focus the textarea and scroll to the relevant line
+  dom.codeEditor.focus();
+  if (clickX !== undefined && clickY !== undefined) {
+    _syncCodeEditorToClick(clickX, clickY);
+  }
+}
+
+// Initialise the vertical resize handle between preview and code pane.
+function _initLiveEditResize() {
+  let startY, startH;
+  _liveEditDivider.addEventListener('mousedown', e => {
+    e.preventDefault();
+    startY = e.clientY;
+    startH = dom.codePane.offsetHeight;
+    _liveEditDivider.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'row-resize';
+
+    const onMove = mv => {
+      const delta  = startY - mv.clientY; // drag up → taller code pane
+      const panelH = dom.panelRight.offsetHeight;
+      const newH   = Math.min(Math.max(80, startH + delta), Math.floor(panelH * 0.8));
+      _liveEditCodeH = newH;
+      dom.panelRight.style.setProperty('--live-code-h', newH + 'px');
+    };
+    const onUp = () => {
+      _liveEditDivider.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// Scroll the code editor so the line nearest the clicked rendered element is visible.
+function _syncCodeEditorToClick(x, y) {
+  requestAnimationFrame(() => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return;
+    const block = el.closest('[data-source-line]');
+    if (!block) return;
+    const lineIdx = parseInt(block.dataset.sourceLine, 10) - 1; // 0-based
+    if (isNaN(lineIdx) || lineIdx < 0) return;
+
+    const lines = dom.codeEditor.value.split('\n');
+    if (lineIdx >= lines.length) return;
+
+    // Move caret to the start of that line
+    const charOffset = lines.slice(0, lineIdx).reduce((acc, l) => acc + l.length + 1, 0);
+    dom.codeEditor.setSelectionRange(charOffset, charOffset);
+
+    // Scroll so the target line is vertically centred in the textarea
+    const lineH = 13 * 1.75; // matches font-size × line-height in .code-editor
+    dom.codeEditor.scrollTop = Math.max(0, lineIdx * lineH - dom.codePane.offsetHeight / 2);
+  });
 }
 
 function _exitInlineEditMode(doRender = true) {
   if (!state.isInlineEditing) return;
   state.isInlineEditing = false;
 
-  const editEl = dom.previewPane.querySelector('#inline-editor');
-  if (editEl) {
-    dom.codeEditor.value = _getInlineContent(editEl);
-    updateCodeHighlight();
-    dom.lineNumbers._count = null;
-    updateLineNumbers();
-  }
+  clearTimeout(_liveRenderTimer);
 
+  // Collapse split view
+  dom.panelRight.classList.remove('live-edit-mode');
+  dom.codePane.classList.add('hidden');
   dom.btnEditInline.classList.remove('edit-active');
-  dom.previewPane.classList.remove('inline-edit-active');
 
+  // Final render so preview reflects any edits made since the last debounce tick
   if (doRender) renderMarkdown(dom.codeEditor.value);
 }
 
@@ -2354,86 +2349,34 @@ function showFormatToolbar(selectionRect) {
 }
 
 // Detect which formats are currently active for the given selection range.
-// In rendered mode: inspect ancestor DOM tags.
-// In inline edit mode: inspect surrounding text for markdown markers.
+// Walks up the rendered DOM from the selection anchor — works in both plain rendered view
+// and live-edit split view (where the preview pane still shows rendered HTML).
 function _detectActiveFormats(range) {
   const active = new Set();
 
-  if (state.isInlineEditing) {
-    // Edit mode: check raw markdown markers in the contenteditable text
-    const editEl = dom.previewPane.querySelector('#inline-editor');
-    if (!editEl) return active;
+  let el = range.startContainer.nodeType === Node.TEXT_NODE
+    ? range.startContainer.parentElement
+    : range.startContainer;
 
-    const selText = range.toString();
-    if (!selText) return active;
-
-    const fullText  = _getInlineContent(editEl);
-    const selStart  = _getCharOffset(editEl, range.startContainer, range.startOffset);
-    const selEnd    = selStart + selText.length;
-
-    // Inline formats
-    const inlineFormats = [
-      ['bold',          '**', '**'],
-      ['strikethrough', '~~', '~~'],
-      ['highlight',     '==', '=='],
-      ['italic',        '*',  '*' ],
-      ['code',          '`',  '`' ],
-      ['sub',           '~',  '~' ],
-      ['sup',           '^',  '^' ],
-    ];
-    for (const [fmt, pre, suf] of inlineFormats) {
-      const startPos = selStart - pre.length;
-      const endPos   = selEnd;
-      if (startPos < 0 || endPos + suf.length > fullText.length) continue;
-      if (fullText.slice(startPos, selStart) !== pre) continue;
-      if (fullText.slice(endPos, endPos + suf.length) !== suf) continue;
-      // Single-char check: confirm not part of a double-delimiter
-      if (pre.length === 1) {
-        const ch = pre[0];
-        const before = startPos > 0 ? fullText[startPos - 1] : '';
-        const after  = endPos + suf.length < fullText.length ? fullText[endPos + suf.length] : '';
-        if (before === ch || after === ch) continue;
-      }
-      active.add(fmt);
+  while (el && el !== dom.previewPane) {
+    const tag = el.tagName?.toLowerCase();
+    if (tag === 'strong' || tag === 'b')            active.add('bold');
+    if (tag === 'em'     || tag === 'i')            active.add('italic');
+    if (tag === 's'      || tag === 'del')          active.add('strikethrough');
+    if (tag === 'blockquote')                        active.add('blockquote');
+    if (tag === 'code' && !el.closest('pre'))        active.add('code');
+    if (tag === 'pre')                               active.add('fenced');
+    if (tag === 'h1')                                active.add('h1');
+    if (tag === 'h2')                                active.add('h2');
+    if (tag === 'h3')                                active.add('h3');
+    if (tag === 'mark')                              active.add('highlight');
+    if (tag === 'sub')                               active.add('sub');
+    if (tag === 'sup')                               active.add('sup');
+    if (tag === 'li') {
+      if (el.closest('ul')) active.add('ul');
+      if (el.closest('ol')) active.add('ol');
     }
-
-    // Block formats: check the line containing selStart
-    const lineStart = fullText.lastIndexOf('\n', selStart - 1) + 1;
-    const lineEnd   = fullText.indexOf('\n', selStart);
-    const line      = fullText.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
-    if (/^# (?!#)/.test(line))   active.add('h1');
-    if (/^## (?!#)/.test(line))  active.add('h2');
-    if (/^### /.test(line))      active.add('h3');
-    if (line.startsWith('> '))   active.add('blockquote');
-    if (/^[-*+] /.test(line))    active.add('ul');
-    if (/^\d+[.)\s]/.test(line)) active.add('ol');
-
-  } else {
-    // Rendered mode: walk up the DOM from the selection anchor
-    let el = range.startContainer.nodeType === Node.TEXT_NODE
-      ? range.startContainer.parentElement
-      : range.startContainer;
-
-    while (el && el !== dom.previewPane) {
-      const tag = el.tagName?.toLowerCase();
-      if (tag === 'strong' || tag === 'b')            active.add('bold');
-      if (tag === 'em'     || tag === 'i')            active.add('italic');
-      if (tag === 's'      || tag === 'del')          active.add('strikethrough');
-      if (tag === 'blockquote')                        active.add('blockquote');
-      if (tag === 'code' && !el.closest('pre'))        active.add('code');
-      if (tag === 'pre')                               active.add('fenced');
-      if (tag === 'h1')                                active.add('h1');
-      if (tag === 'h2')                                active.add('h2');
-      if (tag === 'h3')                                active.add('h3');
-      if (tag === 'mark')                              active.add('highlight');
-      if (tag === 'sub')                               active.add('sub');
-      if (tag === 'sup')                               active.add('sup');
-      if (tag === 'li') {
-        if (el.closest('ul')) active.add('ul');
-        if (el.closest('ol')) active.add('ol');
-      }
-      el = el.parentElement;
-    }
+    el = el.parentElement;
   }
 
   return active;
@@ -2468,11 +2411,9 @@ function getFormatMarkers(format) {
 
 function applyFormat(format) {
   const markers = getFormatMarkers(format);
-  if (state.isInlineEditing) {
-    _applyFormatToEditMode(markers);
-  } else {
-    _applyFormatToRenderedMode(markers);
-  }
+  // Format is always applied to the rendered selection (even in live-edit split view,
+  // the selection happens in the preview pane, not the code textarea).
+  _applyFormatToRenderedMode(markers);
   hideFormatToolbar();
 }
 
