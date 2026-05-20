@@ -424,11 +424,11 @@ async function createNewFile() {
       dom.btnEditInline.classList.remove('hidden');
       dom.codeEditor.value = '';
       await renderMarkdown('');
-      setView('code', false); // go straight to code view; don't persist so next file open stays rendered
+      setView('rendered', false); // stay in rendered view; don't persist
       updateLineNumbers();
       updateCodeHighlight();
-      // Start rename right away so user can set a real name
-      startRename(handle, state.currentDirHandle, item, name);
+      // Auto-activate inline edit mode so the cursor is ready immediately
+      _enterInlineEditMode();
     }
   } catch (err) {
     showToast('Could not create file: ' + err.message, 'error');
@@ -2096,6 +2096,19 @@ function initInlineEditor() {
 
   // Hide format toolbar when preview pane scrolls
   dom.previewPane.addEventListener('scroll', () => hideFormatToolbar(), { passive: true });
+
+  // Click anywhere in the rendered preview (not on links/code/diagrams) → enter inline edit mode.
+  // Only fires on a simple click (no selection drag).
+  dom.previewPane.addEventListener('click', e => {
+    if (!state.currentFileHandle) return;
+    if (state.currentView !== 'rendered') return;
+    if (state.isInlineEditing) return;
+    if (e.target.closest('a, button, .mermaid-diagram, pre, #preview-empty')) return;
+    // Don't activate if the user just finished making a text selection
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    _enterInlineEditMode(e.clientX, e.clientY);
+  });
 }
 
 function toggleInlineEdit() {
@@ -2106,7 +2119,8 @@ function toggleInlineEdit() {
   }
 }
 
-function _enterInlineEditMode() {
+// clickX/clickY: optional viewport coords used to position cursor near the click point.
+function _enterInlineEditMode(clickX, clickY) {
   if (!state.currentFileHandle) return;
   if (state.currentView !== 'rendered') return;
   if (state.isInlineEditing) return;
@@ -2115,60 +2129,105 @@ function _enterInlineEditMode() {
   dom.btnEditInline.classList.add('edit-active');
   dom.previewPane.classList.add('inline-edit-active');
 
-  // Build the editable div with raw markdown source
+  // Build the editable element showing raw markdown source.
+  // Use contenteditable="true" for maximum compat — backspace, delete, arrows all work.
   const editEl = document.createElement('div');
   editEl.id = 'inline-editor';
   editEl.className = 'inline-editor';
-  editEl.contentEditable = 'plaintext-only';
+  editEl.contentEditable = 'true';
   editEl.spellcheck = false;
   editEl.setAttribute('autocorrect', 'off');
   editEl.setAttribute('autocapitalize', 'off');
-  editEl.setAttribute('data-gramm', 'false');        // disable Grammarly
-  editEl.setAttribute('data-gramm_editor', 'false'); // disable Grammarly
+  editEl.setAttribute('data-gramm', 'false');
+  editEl.setAttribute('data-gramm_editor', 'false');
   editEl.textContent = dom.codeEditor.value;
 
-  // Clear pane and inject editable content
   dom.previewPane.innerHTML = '';
   dom.previewPane.appendChild(editEl);
   editEl.focus();
 
-  // Place cursor at start
-  const range = document.createRange();
-  const sel   = window.getSelection();
-  range.setStart(editEl, 0);
-  range.collapse(true);
-  sel.removeAllRanges();
-  sel.addRange(range);
+  // Override Enter: insert plain \n instead of browser-default <div>/<br>
+  editEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const s = window.getSelection();
+      if (!s.rangeCount) return;
+      const r = s.getRangeAt(0);
+      r.deleteContents();
+      const nl = document.createTextNode('\n');
+      r.insertNode(nl);
+      r.setStartAfter(nl);
+      r.collapse(true);
+      s.removeAllRanges();
+      s.addRange(r);
+      editEl.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      _exitInlineEditMode(true);
+    }
+  });
 
-  // Sync edits → code editor (mark dirty, update highlight)
+  // Strip rich formatting from pasted content
+  editEl.addEventListener('paste', e => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    const s = window.getSelection();
+    if (!s.rangeCount) return;
+    const r = s.getRangeAt(0);
+    r.deleteContents();
+    const node = document.createTextNode(text);
+    r.insertNode(node);
+    r.setStartAfter(node);
+    r.collapse(true);
+    s.removeAllRanges();
+    s.addRange(r);
+    editEl.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  // Sync every edit to the code editor
   editEl.addEventListener('input', () => {
-    const raw = editEl.innerText.replace(/ /g, ' ');
-    dom.codeEditor.value = raw;
+    dom.codeEditor.value = _getInlineContent(editEl);
     _markDirty();
     updateCodeHighlight();
-    // Update line numbers so Save knows current line count
     dom.lineNumbers._count = null;
     updateLineNumbers();
   });
 
-  // Blur → exit edit mode and re-render
-  // Use a small delay so format-toolbar mousedown fires first
+  // Blur -> exit edit mode. Delay so format-toolbar mousedown can preventDefault first.
   editEl.addEventListener('blur', () => {
     setTimeout(() => {
-      if (state.isInlineEditing) _exitInlineEditMode(true);
-    }, 120);
+      if (state.isInlineEditing && document.activeElement !== editEl) {
+        _exitInlineEditMode(true);
+      }
+    }, 150);
   });
+
+  // Position cursor: prefer the clicked point, fall back to content start
+  if (clickX !== undefined && clickY !== undefined) {
+    requestAnimationFrame(() => {
+      try {
+        const targetRange = document.caretRangeFromPoint?.(clickX, clickY) ?? null;
+        if (targetRange && editEl.contains(targetRange.startContainer)) {
+          const s = window.getSelection();
+          s.removeAllRanges();
+          s.addRange(targetRange);
+        } else {
+          _placeCursorAt(editEl, 0);
+        }
+      } catch (_) { _placeCursorAt(editEl, 0); }
+    });
+  } else {
+    _placeCursorAt(editEl, 0);
+  }
 }
 
 function _exitInlineEditMode(doRender = true) {
   if (!state.isInlineEditing) return;
   state.isInlineEditing = false;
 
-  // Sync final text before destroying the element
   const editEl = dom.previewPane.querySelector('#inline-editor');
   if (editEl) {
-    const raw = editEl.innerText.replace(/ /g, ' ');
-    dom.codeEditor.value = raw;
+    dom.codeEditor.value = _getInlineContent(editEl);
     updateCodeHighlight();
     dom.lineNumbers._count = null;
     updateLineNumbers();
@@ -2177,9 +2236,54 @@ function _exitInlineEditMode(doRender = true) {
   dom.btnEditInline.classList.remove('edit-active');
   dom.previewPane.classList.remove('inline-edit-active');
 
-  if (doRender) {
-    renderMarkdown(dom.codeEditor.value);
+  if (doRender) renderMarkdown(dom.codeEditor.value);
+}
+
+// Extract plain-text markdown from the inline editor, normalising special whitespace.
+function _getInlineContent(editEl) {
+  return (editEl.innerText || editEl.textContent)
+    .replace(/\u00A0/g, ' ')
+    .replace(/\u2028/g, '\n')
+    .replace(/\u2029/g, '\n');
+}
+
+// Place caret at charOffset within a contenteditable element.
+function _placeCursorAt(el, charOffset) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let rem = charOffset;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (rem <= node.textContent.length) {
+      try {
+        const r = document.createRange();
+        r.setStart(node, rem);
+        r.collapse(true);
+        const s = window.getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+      } catch (_) {}
+      return;
+    }
+    rem -= node.textContent.length;
   }
+  // Fallback: end of element
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(false);
+  const s = window.getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+}
+
+// Character offset of (targetNode, targetOffset) within a contenteditable.
+function _getCharOffset(el, targetNode, targetOffset) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let pos = 0;
+  while (walker.nextNode()) {
+    if (walker.currentNode === targetNode) return pos + targetOffset;
+    pos += walker.currentNode.textContent.length;
+  }
+  return pos;
 }
 
 
@@ -2222,26 +2326,117 @@ function showFormatToolbar(selectionRect) {
   const tb = dom.formatToolbar;
   tb.classList.remove('hidden');
 
-  // Force layout to measure toolbar dimensions
-  const tbRect = tb.getBoundingClientRect();
-  const tbW = tbRect.width || 420; // fallback estimate
-  const tbH = tbRect.height || 38;
+  // Detect and highlight which formats are already active on the selection
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount) {
+    const active = _detectActiveFormats(sel.getRangeAt(0));
+    tb.querySelectorAll('.fmt-btn').forEach(btn => {
+      btn.classList.toggle('fmt-active', active.has(btn.dataset.format));
+    });
+  }
 
-  const GAP = 10; // gap between toolbar bottom and selection top
+  // Position: measure toolbar after it's visible
+  const tbRect = tb.getBoundingClientRect();
+  const tbW = tbRect.width || 400;
+  const tbH = tbRect.height || 36;
+  const GAP = 10;
 
   let top  = selectionRect.top - tbH - GAP;
   let left = selectionRect.left + selectionRect.width / 2;
 
-  // Don't go off-screen top
   if (top < 8) top = selectionRect.bottom + GAP;
 
-  // Clamp horizontally
   const margin = 8;
-  const halfTb = tbW / 2;
-  left = Math.min(window.innerWidth - halfTb - margin, Math.max(halfTb + margin, left));
+  left = Math.min(window.innerWidth - tbW / 2 - margin, Math.max(tbW / 2 + margin, left));
 
   tb.style.top  = top + 'px';
   tb.style.left = left + 'px';
+}
+
+// Detect which formats are currently active for the given selection range.
+// In rendered mode: inspect ancestor DOM tags.
+// In inline edit mode: inspect surrounding text for markdown markers.
+function _detectActiveFormats(range) {
+  const active = new Set();
+
+  if (state.isInlineEditing) {
+    // Edit mode: check raw markdown markers in the contenteditable text
+    const editEl = dom.previewPane.querySelector('#inline-editor');
+    if (!editEl) return active;
+
+    const selText = range.toString();
+    if (!selText) return active;
+
+    const fullText  = _getInlineContent(editEl);
+    const selStart  = _getCharOffset(editEl, range.startContainer, range.startOffset);
+    const selEnd    = selStart + selText.length;
+
+    // Inline formats
+    const inlineFormats = [
+      ['bold',          '**', '**'],
+      ['strikethrough', '~~', '~~'],
+      ['highlight',     '==', '=='],
+      ['italic',        '*',  '*' ],
+      ['code',          '`',  '`' ],
+      ['sub',           '~',  '~' ],
+      ['sup',           '^',  '^' ],
+    ];
+    for (const [fmt, pre, suf] of inlineFormats) {
+      const startPos = selStart - pre.length;
+      const endPos   = selEnd;
+      if (startPos < 0 || endPos + suf.length > fullText.length) continue;
+      if (fullText.slice(startPos, selStart) !== pre) continue;
+      if (fullText.slice(endPos, endPos + suf.length) !== suf) continue;
+      // Single-char check: confirm not part of a double-delimiter
+      if (pre.length === 1) {
+        const ch = pre[0];
+        const before = startPos > 0 ? fullText[startPos - 1] : '';
+        const after  = endPos + suf.length < fullText.length ? fullText[endPos + suf.length] : '';
+        if (before === ch || after === ch) continue;
+      }
+      active.add(fmt);
+    }
+
+    // Block formats: check the line containing selStart
+    const lineStart = fullText.lastIndexOf('\n', selStart - 1) + 1;
+    const lineEnd   = fullText.indexOf('\n', selStart);
+    const line      = fullText.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
+    if (/^# (?!#)/.test(line))   active.add('h1');
+    if (/^## (?!#)/.test(line))  active.add('h2');
+    if (/^### /.test(line))      active.add('h3');
+    if (line.startsWith('> '))   active.add('blockquote');
+    if (/^[-*+] /.test(line))    active.add('ul');
+    if (/^\d+[.)\s]/.test(line)) active.add('ol');
+
+  } else {
+    // Rendered mode: walk up the DOM from the selection anchor
+    let el = range.startContainer.nodeType === Node.TEXT_NODE
+      ? range.startContainer.parentElement
+      : range.startContainer;
+
+    while (el && el !== dom.previewPane) {
+      const tag = el.tagName?.toLowerCase();
+      if (tag === 'strong' || tag === 'b')            active.add('bold');
+      if (tag === 'em'     || tag === 'i')            active.add('italic');
+      if (tag === 's'      || tag === 'del')          active.add('strikethrough');
+      if (tag === 'blockquote')                        active.add('blockquote');
+      if (tag === 'code' && !el.closest('pre'))        active.add('code');
+      if (tag === 'pre')                               active.add('fenced');
+      if (tag === 'h1')                                active.add('h1');
+      if (tag === 'h2')                                active.add('h2');
+      if (tag === 'h3')                                active.add('h3');
+      if (tag === 'mark')                              active.add('highlight');
+      if (tag === 'sub')                               active.add('sub');
+      if (tag === 'sup')                               active.add('sup');
+      if (tag === 'li') {
+        if (el.closest('ul')) active.add('ul');
+        if (el.closest('ol')) active.add('ol');
+      }
+      el = el.parentElement;
+    }
+  }
+
+  return active;
 }
 
 function hideFormatToolbar() {
@@ -2283,39 +2478,50 @@ function applyFormat(format) {
 
 // ── Edit mode: apply formatting directly in the contenteditable ─────────────
 function _applyFormatToEditMode({ prefix, suffix, block }) {
+  const editEl = dom.previewPane.querySelector('#inline-editor');
+  if (!editEl) return;
+
   const sel = window.getSelection();
   if (!sel || !sel.rangeCount) return;
 
   const selectedText = sel.toString();
   if (!selectedText) return;
 
-  let replacement;
-  if (block) {
-    replacement = selectedText.split('\n').map(l => prefix + l).join('\n');
-  } else {
-    replacement = prefix + selectedText + suffix;
-  }
-
-  // Insert text in place of the selection
   const range = sel.getRangeAt(0);
-  range.deleteContents();
-  const node = document.createTextNode(replacement);
-  range.insertNode(node);
 
-  // Move cursor to end of inserted text
-  range.setStartAfter(node);
-  range.collapse(true);
-  sel.removeAllRanges();
-  sel.addRange(range);
+  if (block) {
+    // Block format: toggle prefix on each selected line, then DOM-insert
+    const lines = selectedText.split('\n');
+    const allHave = lines.every(l => l.startsWith(prefix));
+    const replacement = lines.map(l => allHave ? l.slice(prefix.length) : prefix + l).join('\n');
+    range.deleteContents();
+    const node = document.createTextNode(replacement);
+    range.insertNode(node);
+    range.setStartAfter(node);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    // Inline format: operate on full text so toggle detection is accurate
+    const fullText = _getInlineContent(editEl);
+    const selStart = _getCharOffset(editEl, range.startContainer, range.startOffset);
+
+    const newText = _applyInlineFormat(fullText, selectedText, prefix, suffix);
+    if (newText === null) return; // text not found in source
+
+    const wasToggleOff = newText.length < fullText.length;
+    const newCursor = wasToggleOff
+      ? selStart - prefix.length + selectedText.length
+      : selStart + prefix.length + selectedText.length;
+
+    editEl.textContent = newText;
+    _placeCursorAt(editEl, Math.max(0, newCursor));
+  }
 
   // Sync to code editor
-  const editEl = dom.previewPane.querySelector('#inline-editor');
-  if (editEl) {
-    const raw = editEl.innerText.replace(/ /g, ' ');
-    dom.codeEditor.value = raw;
-    _markDirty();
-    updateCodeHighlight();
-  }
+  dom.codeEditor.value = _getInlineContent(editEl);
+  _markDirty();
+  updateCodeHighlight();
 }
 
 // ── Rendered mode: apply formatting to markdown source, then re-render ───────
@@ -2401,33 +2607,42 @@ function _toggleBlockFormat(lines, prefix, startLine, endLine) {
 }
 
 // Find `selectedText` in `source` and wrap it with prefix/suffix. Returns null if not found.
-// Toggles: if already wrapped, removes the markers instead.
+// Toggles off if already exactly wrapped — uses strict delimiter check so single-char
+// markers (e.g. * italic) don't false-fire inside multi-char ones (** bold).
 function _applyInlineFormat(source, selectedText, prefix, suffix) {
   const idx = source.indexOf(selectedText);
   if (idx === -1) return null;
 
-  // Toggle check: is the selection already wrapped?
   if (prefix && suffix) {
-    const beforeOk = idx >= prefix.length &&
-      source.slice(idx - prefix.length, idx) === prefix;
-    const afterOk  = source.slice(idx + selectedText.length,
-      idx + selectedText.length + suffix.length) === suffix;
-    if (beforeOk && afterOk) {
-      // Remove markers
-      return (
-        source.slice(0, idx - prefix.length) +
-        selectedText +
-        source.slice(idx + selectedText.length + suffix.length)
-      );
+    const startPos = idx - prefix.length;
+    const endPos   = idx + selectedText.length;
+
+    if (startPos >= 0 && endPos + suffix.length <= source.length) {
+      const pre = source.slice(startPos, idx);
+      const suf = source.slice(endPos, endPos + suffix.length);
+
+      if (pre === prefix && suf === suffix) {
+        if (prefix.length === 1) {
+          // Single-char delimiter: confirm no adjacent same char (would be **)
+          const ch         = prefix[0];
+          const charBefore = startPos > 0 ? source[startPos - 1] : '';
+          const charAfter  = (endPos + suffix.length) < source.length
+            ? source[endPos + suffix.length] : '';
+          if (charBefore !== ch && charAfter !== ch) {
+            // Confirmed single wrap — toggle off
+            return source.slice(0, startPos) + selectedText + source.slice(endPos + suffix.length);
+          }
+          // else: part of a double-delimiter, fall through to wrap below
+        } else {
+          // Multi-char prefix (**,~~,==,^^,~~) — safe to toggle off directly
+          return source.slice(0, startPos) + selectedText + source.slice(endPos + suffix.length);
+        }
+      }
     }
   }
 
-  // Wrap
-  return (
-    source.slice(0, idx) +
-    prefix + selectedText + suffix +
-    source.slice(idx + selectedText.length)
-  );
+  // Apply wrap
+  return source.slice(0, idx) + prefix + selectedText + suffix + source.slice(idx + selectedText.length);
 }
 
 

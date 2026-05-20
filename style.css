@@ -2007,6 +2007,16 @@ kbd {
   color: #fef08a;
 }
 
+/* Active state: format is already applied to the selection */
+.fmt-btn.fmt-active {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25);
+}
+.fmt-btn.fmt-active:hover {
+  background: rgba(255, 255, 255, 0.30);
+}
+
 .fmt-sep {
   display: inline-block;
   width: 1px;
