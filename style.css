@@ -3,12 +3,14 @@
 ═══════════════════════════════════════════════════════════ */
 :root {
   /* Colors */
-  --color-flame:     #E8391D;
+  --color-flame:     #E8391D;  /* brand fill — borders, icons, accents */
+  --color-flame-text:#C7300F;  /* flame as TEXT on light surfaces (5.2:1 on cream) */
+  --color-flame-deep:#D9330F;  /* flame BEHIND white text (4.7:1 with #fff) */
   --color-orange:    #F5760A;
   --color-amber:     #F5A623;
   --color-charcoal:  #111111;
   --color-mid:       #555555;
-  --color-light:     #999999;
+  --color-light:     #6E6E6E;  /* was #999999 — 2.8:1, below AA */
   --color-cream:     #FFF8F0;
   --color-parchment: #FFF0E0;
   --color-green:     #1B5E3B;
@@ -45,7 +47,7 @@
   --s12: 48px; --s16: 64px; --s24: 96px;
 
   /* Gradient */
-  --gradient-flame: linear-gradient(135deg, #F5A623, #F5760A, #E8391D);
+  --gradient-flame: linear-gradient(135deg, #F5A623, #F5760A, var(--color-flame-deep));
 
   /* Transitions */
   --t: 0.2s ease;
@@ -196,7 +198,7 @@ textarea, input { font-family: var(--font-mono); }
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 13px;
-  color: var(--color-flame);
+  color: var(--color-flame-text);
   text-align: left;
 }
 
@@ -259,7 +261,7 @@ textarea, input { font-family: var(--font-mono); }
   text-decoration: none;
   transition: color var(--t);
 }
-.landing-footer a:hover { color: var(--color-flame); }
+.landing-footer a:hover { color: var(--color-flame-text); }
 
 /* Product Hunt badge — inside footer */
 .landing-ph-badge {
@@ -451,7 +453,7 @@ textarea, input { font-family: var(--font-mono); }
 
 .file-item.active {
   background: var(--flame-tint-md);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
   font-weight: 500;
 }
 
@@ -491,7 +493,7 @@ textarea, input { font-family: var(--font-mono); }
   color: rgba(232, 57, 29, 0.5);
 }
 .file-item-delete:hover {
-  color: var(--color-flame) !important;
+  color: var(--color-flame-text) !important;
   background: rgba(232, 57, 29, 0.1);
 }
 
@@ -516,7 +518,7 @@ textarea, input { font-family: var(--font-mono); }
 .file-item.drag-over {
   background: var(--flame-tint-md) !important;
   box-shadow: inset 2px 0 0 var(--color-flame), inset -1px 0 0 var(--border);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
   font-weight: 600;
 }
 .file-item.drag-over .file-item-icon { opacity: 1; }
@@ -577,7 +579,7 @@ textarea, input { font-family: var(--font-mono); }
 }
 
 .search-bar:focus-within .search-bar-icon {
-  color: var(--color-flame);
+  color: var(--color-flame-text);
 }
 
 .search-input {
@@ -614,7 +616,7 @@ textarea, input { font-family: var(--font-mono); }
 }
 .search-clear-btn:hover {
   background: rgba(232,57,29,0.15);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
 }
 
 
@@ -714,7 +716,7 @@ textarea, input { font-family: var(--font-mono); }
   white-space: nowrap;
   flex: 1;
 }
-.search-card.active .search-card-name { color: var(--color-flame); }
+.search-card.active .search-card-name { color: var(--color-flame-text); }
 
 .search-card-path {
   font-size: 10px;
@@ -747,7 +749,7 @@ mark.search-match {
 
 /* Current (focused) match — flame orange so it stands out from the yellow ones */
 mark.search-match.current {
-  background: var(--color-flame);
+  background: var(--color-flame-deep);
   color: #fff;
   box-shadow: 0 0 0 2px rgba(232, 57, 29, 0.35);
 }
@@ -808,7 +810,7 @@ mark.search-match.current {
 }
 .match-nav-btn:hover {
   border-color: var(--color-flame);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
   background: var(--flame-tint-xs);
 }
 
@@ -838,7 +840,7 @@ mark.search-match.current {
 }
 .match-nav-close:hover {
   background: rgba(232,57,29,0.15);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
 }
 
 
@@ -977,7 +979,13 @@ mark.search-match.current {
 .preview-pane {
   flex: 1;
   overflow-y: auto;
-  padding: var(--s10) var(--s12);
+  /*
+   * Padding-based centering: keeps the ENTIRE pane as the clickable/editable area.
+   * max() clamps to a minimum of var(--s6) on narrow panes so text stays readable.
+   * This replaces the old "max-width + margin:auto on children" approach, which
+   * created a dead click zone outside the centred content block.
+   */
+  padding: var(--s10) max(var(--s6), calc((100% - 780px) / 2));
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
@@ -988,15 +996,14 @@ mark.search-match.current {
 }
 .preview-pane::-webkit-scrollbar-track { background: transparent; }
 
-/* Center prose content */
+/* Children fill the pane width (padding on parent handles max-width centering) */
 .preview-pane > *:not(#preview-empty) {
-  max-width: 780px;
-  margin-left: auto;
-  margin-right: auto;
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
   display: block;
 }
 
-/* Override for elements that don't use block display by default */
 .preview-pane > p,
 .preview-pane > h1,
 .preview-pane > h2,
@@ -1011,9 +1018,9 @@ mark.search-match.current {
 .preview-pane > table,
 .preview-pane > hr,
 .preview-pane > img {
-  max-width: 780px;
-  margin-left: auto;
-  margin-right: auto;
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .preview-empty {
@@ -1048,7 +1055,7 @@ mark.search-match.current {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.75;
-  color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.55);
   text-align: right;
   overflow: hidden;       /* scroll is driven by JS, not user */
   user-select: none;
@@ -1272,7 +1279,7 @@ mark.search-match.current {
 }
 .icon-btn-panel:hover {
   background: var(--flame-tint-sm);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
 }
 .icon-btn-panel:disabled {
   color: var(--color-light);
@@ -1285,7 +1292,7 @@ mark.search-match.current {
 }
 .preview-toolbar .icon-btn:hover {
   background: var(--flame-tint-sm);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
 }
 
 
@@ -1406,7 +1413,7 @@ mark.search-match.current {
 
 /* ── Danger button ────────────────────────────────────────── */
 .btn-danger {
-  background: var(--color-flame);
+  background: var(--color-flame-deep);
   color: white;
   border: none;
   box-shadow: 0 2px 8px rgba(232,57,29,0.35);
@@ -1455,7 +1462,7 @@ mark.search-match.current {
   height: 48px;
   border-radius: 50%;
   background: rgba(232,57,29,0.1);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1550,7 +1557,7 @@ mark.search-match.current {
 }
 
 .preview-pane a {
-  color: var(--color-flame);
+  color: var(--color-flame-text);
   text-decoration: underline;
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
@@ -1567,6 +1574,14 @@ mark.search-match.current {
 }
 
 /* Inline code (scoped to inline only — not inside <pre>) */
+/* Inline code keeps its own weight inside headings — inheriting 800 made it
+   indistinguishable from bold heading text. */
+.preview-pane h1 code, .preview-pane h2 code, .preview-pane h3 code,
+.preview-pane h4 code, .preview-pane h5 code, .preview-pane h6 code {
+  font-weight: 500;
+  font-size: 0.86em;
+}
+
 .preview-pane :not(pre) > code {
   font-family: var(--font-mono);
   font-size: 0.86em;
@@ -1601,7 +1616,7 @@ mark.search-match.current {
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.62);
   background: rgba(255, 255, 255, 0.06);
   border-bottom-left-radius: var(--radius-xs);
   pointer-events: none;
@@ -1649,7 +1664,7 @@ mark.search-match.current {
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--color-flame);
+  color: var(--color-flame-text);
 }
 
 /* Blockquote */
@@ -1660,7 +1675,6 @@ mark.search-match.current {
   background: var(--flame-tint-xs);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--color-mid);
-  font-style: italic;
 }
 .preview-pane blockquote p { margin-bottom: 0; color: var(--color-mid); font-size: 14px; }
 .preview-pane blockquote p:not(:last-child) { margin-bottom: var(--s2); }
@@ -1795,7 +1809,7 @@ mark.search-match.current {
 }
 .modal-close-btn:hover {
   background: rgba(232,57,29,0.12);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
 }
 
 .shortcuts-grid {
@@ -1888,7 +1902,7 @@ kbd {
 /* Active state for the edit inline button */
 .icon-btn.edit-active {
   background: var(--flame-tint-md);
-  color: var(--color-flame);
+  color: var(--color-flame-text);
 }
 
 /* ── Side-by-side split view (⌘E toggle) ───────────────────────
@@ -1898,20 +1912,37 @@ kbd {
    │  (contenteditable│   │  (raw markdown)   │
    └──────────────────┴───┴──────────────────┘
 ─────────────────────────────────────────────────────────────── */
-.panel-right.live-edit-mode {
-  flex-direction: row; /* override default column layout */
+/* content-area: flex wrapper that holds preview + code pane.
+   Exists so that split-view's row layout does NOT affect the toolbar above it. */
+.content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.panel-right.live-edit-mode .preview-pane {
+.content-area.live-edit-mode {
+  flex-direction: row; /* side-by-side split */
+}
+
+.content-area.live-edit-mode .preview-pane {
   flex: 1 1 0;
-  min-width: 180px;
+  min-width: 320px; /* prose floor — below this the measure stops being readable */
   height: 100%;
+  /*
+   * Percentage padding resolves against the CONTAINING BLOCK (.content-area),
+   * not this pane. Full-width they are the same element width so the centering
+   * calc works; split they diverge, and the stale gutter crushed the text as
+   * the divider moved. Split view is narrow enough that a flat gutter is right.
+   */
+  padding-inline: var(--s6);
 }
 
-.panel-right.live-edit-mode .code-pane {
+.content-area.live-edit-mode .code-pane {
   display: flex !important; /* override .hidden */
-  flex: 0 0 var(--live-code-w, 380px);
-  min-width: 120px;
+  flex: 0 0 var(--live-code-w, 50%); /* even split until the user drags */
+  min-width: 240px;
   height: 100%;
   border-left: 1px solid rgba(255,255,255,0.06);
   border-top: none;
@@ -1928,7 +1959,7 @@ kbd {
   position: relative;
   z-index: 10;
 }
-.panel-right.live-edit-mode .live-edit-divider {
+.content-area.live-edit-mode .live-edit-divider {
   display: block;
 }
 .live-edit-divider::after {
@@ -1998,9 +2029,9 @@ kbd {
   background: transparent;
   border: none;
   border-radius: 5px;
-  color: rgba(255,255,255,0.82);
+  color: rgba(255,255,255,0.95);
   font-family: var(--font-body);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background var(--t), color var(--t);
@@ -2056,6 +2087,128 @@ kbd {
   flex-shrink: 0;
 }
 
+/* ═══════════════════════════════════════════════════════════
+   TOOLTIP
+   Replaces the browser's ~1s unstyled native tooltip so icon-only
+   controls explain themselves immediately.
+═══════════════════════════════════════════════════════════ */
+.tip {
+  position: fixed;
+  z-index: 700;
+  max-width: 240px;
+  padding: 6px 9px;
+  border-radius: var(--radius-xs);
+  background: var(--color-charcoal);
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.34), 0 1px 3px rgba(0,0,0,0.24);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.tip.tip-show { opacity: 1; }
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH COMMAND MENU
+   Body-level + fixed: the preview pane scrolls with overflow:auto,
+   which would clip an absolutely-positioned child.
+═══════════════════════════════════════════════════════════ */
+.slash-menu {
+  position: fixed;
+  z-index: 600;
+  width: 260px;
+  max-height: 302px;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-charcoal);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 34px rgba(0,0,0,0.42), 0 2px 6px rgba(0,0,0,0.28);
+  overflow: hidden;
+  user-select: none;
+}
+
+.slash-menu-head {
+  padding: 9px 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.58);
+}
+
+.slash-menu-list {
+  overflow-y: auto;
+  padding: 0 5px 5px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.22) transparent;
+}
+.slash-menu-list::-webkit-scrollbar { width: 6px; }
+.slash-menu-list::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.22);
+  border-radius: 3px;
+}
+
+.slash-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Icon slot — carries the same letterform/SVG mix as the format toolbar */
+.slash-item-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.07);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.slash-item-label { font-weight: 500; line-height: 1.2; }
+.slash-item-hint {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: rgba(255,255,255,0.72);
+  margin-top: 1px;
+}
+
+.slash-item:hover,
+.slash-item.active {
+  background: rgba(255,255,255,0.1);
+}
+.slash-item.active .slash-item-icon {
+  background: var(--color-flame-deep);
+  color: #fff;
+}
+
+.slash-menu-empty {
+  padding: 6px 12px 12px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.72);
+}
+
 /* ── Active indicator: small arrow below toolbar ── */
 .format-toolbar::after {
   content: '';
@@ -2067,4 +2220,74 @@ kbd {
   border-top-color: var(--color-charcoal);
   margin-top: -1px;
   pointer-events: none;
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   PDF EXPORT (print)
+   Reuses the exact preview-pane markdown styles above — the
+   printed/exported PDF is pixel-for-pixel the same render.
+═══════════════════════════════════════════════════════════ */
+@media print {
+  @page { margin: 15mm 16mm; }
+
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  html, body {
+    height: auto;
+    overflow: visible;
+    background: #fff !important;
+  }
+
+  /* Hide all app chrome — only the rendered markdown prints */
+  .landing-screen,
+  .app-header,
+  .panel-left,
+  .resize-handle,
+  .preview-toolbar,
+  .match-nav,
+  .format-toolbar,
+  .toast-container,
+  .help-btn,
+  .code-pane,
+  .modal-overlay {
+    display: none !important;
+  }
+
+  .app-shell, .app-main, .panel-right, .content-area, .preview-pane {
+    background: #fff !important;
+  }
+
+  .app-shell, .app-main, .panel-right, .content-area {
+    display: block !important;
+    height: auto !important;
+    width: auto !important;
+    overflow: visible !important;
+    position: static !important;
+  }
+
+  /* Force the rendered pane visible regardless of current view mode
+     (Code / Split), since preview-pane always holds the latest render */
+  .preview-pane {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .preview-pane pre,
+  .preview-pane .mermaid-diagram,
+  .preview-pane table,
+  .preview-pane img {
+    break-inside: avoid;
+  }
+  .preview-pane h1,
+  .preview-pane h2,
+  .preview-pane h3 {
+    break-after: avoid;
+  }
 }
