@@ -1599,6 +1599,9 @@ mark.search-match.current {
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: #1e2127;           /* explicit dark — no cream bleed-through */
+  color: #d4d4d4;                /* editing can drop text straight into <pre>;
+                                    without this it inherits charcoal and is
+                                    invisible on the dark block */
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-top: 2px solid rgba(97, 175, 239, 0.45);   /* blue top accent */
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);

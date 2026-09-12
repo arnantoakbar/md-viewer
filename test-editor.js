@@ -180,12 +180,14 @@ async function runEditorTests() {
   }
 
   /* ── 6. ESCAPING QUOTES AND LISTS ────────────────────────*/
+  // Enter must NOT leave the quote — it keeps adding lines to the same one.
+  // ArrowDown is the way out (covered in group 15).
   await load('> Quoted line.\n');
   caretEnd('blockquote p, blockquote');
-  enter();            // new empty line inside the quote
-  enter();            // should now break out
-  ok('escape: Enter twice leaves a quote',
-     !_findInPreview(sel().anchorNode, 'blockquote'), html());
+  enter();
+  enter();
+  ok('escape: Enter keeps the caret inside the quote',
+     !!_findInPreview(sel().anchorNode, 'blockquote'), html());
 
   await load('> Quoted line.\n');
   caret('blockquote p, blockquote', 3);
@@ -343,6 +345,143 @@ async function runEditorTests() {
     ok('toolbar: detects blockquote', a.has('blockquote'));
     ok('toolbar: quote is NOT reported italic (styling only)', !a.has('italic'), [...a].join(','));
   }
+
+  /* ── 14. LIST STARTED UNDER AN EXISTING SENTENCE ─────────
+     Enter then bullet must make a NEW empty item, never convert
+     the sentence above it. */
+  for (const [fmt, marker] of [['ul', '-'], ['ol', '1.']]) {
+    await load('A sentence.\n');
+    caretEnd('p');
+    document.execCommand('insertParagraph');
+    applyFormat(fmt);
+    _flushPreviewSync();
+    ok(`list ${fmt}: sentence above stays a paragraph`,
+       md().startsWith('A sentence.') && md().includes(marker) && !md().startsWith(marker), md());
+    ok(`list ${fmt}: valid markup, no <ul> inside <p>`,
+       !/<p[^>]*>\s*<(ul|ol)/i.test(html()), html());
+  }
+
+  // Converting a sentence directly is still allowed and must stay valid markup
+  await load('Convert me.\n');
+  selectAll('p'); applyFormat('ul'); _flushPreviewSync();
+  ok('list: direct convert produces valid markup',
+     md() === '- Convert me.' && !/<p[^>]*>\s*<ul/i.test(html()), md() + ' | ' + html());
+  applyFormat('ul'); _flushPreviewSync();
+  ok('list: converting back removes the list', md() === 'Convert me.', md());
+
+  /* ── 15. QUOTE CONTINUES ON ENTER, ARROWDOWN ESCAPES ─────*/
+  await load('> First line.\n');
+  caretEnd('blockquote p, blockquote');
+  enter();
+  document.execCommand('insertText', false, 'Second line.');
+  _flushPreviewSync();
+  ok('quote: Enter keeps writing in the SAME quote',
+     dom.previewPane.querySelectorAll('blockquote').length === 1, html());
+  ok('quote: serializes without a quote-breaking blank run',
+     !/>\s*\n>\s*\n>/.test(dom.codeEditor.value) && md().includes('Second line.'),
+     JSON.stringify(dom.codeEditor.value));
+  {
+    // the markdown must re-render as one quote, not two
+    const reHtml = DOMPurify.sanitize(marked.parse(dom.codeEditor.value));
+    const probe = document.createElement('div'); probe.innerHTML = reHtml;
+    ok('quote: round-trips back to a single blockquote',
+       probe.querySelectorAll('blockquote').length === 1, reHtml);
+  }
+
+  await load('> Quoted.\n');
+  caretEnd('blockquote p, blockquote');
+  {
+    const e = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true });
+    dom.previewPane.dispatchEvent(e);
+    ok('quote: ArrowDown at the end escapes it', e.defaultPrevented &&
+       !_findInPreview(sel().anchorNode, 'blockquote'), html());
+  }
+
+  await load('```js\nconst a = 1;\n```\n');
+  {
+    const code = dom.previewPane.querySelector('pre code');
+    _caretIn(code, true);
+    const e = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true });
+    dom.previewPane.dispatchEvent(e);
+    ok('code block: ArrowDown at the end escapes it', e.defaultPrevented &&
+       !_findInPreview(sel().anchorNode, 'pre'), html());
+  }
+
+  /* ── 16. CODE BLOCK TEXT IS READABLE ─────────────────────*/
+  await load('Plain.\n');
+  selectAll('p'); applyFormat('fenced');
+  {
+    const pre = dom.previewPane.querySelector('pre');
+    const parse = c => c.match(/[\d.]+/g).map(Number);
+    const srgb = v => { v/=255; return v<=0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055,2.4); };
+    const L = c => { const [r,g,b] = parse(c); return 0.2126*srgb(r)+0.7152*srgb(g)+0.0722*srgb(b); };
+    const contrast = (a,b) => (Math.max(L(a),L(b))+0.05)/(Math.min(L(a),L(b))+0.05);
+    // text dropped straight into <pre> used to inherit charcoal and vanish
+    ok('code block: <pre> itself carries readable text colour',
+       contrast(getComputedStyle(pre).color, getComputedStyle(pre).backgroundColor) >= 4.5,
+       getComputedStyle(pre).color + ' on ' + getComputedStyle(pre).backgroundColor);
+    ok('code block: <code> is readable too',
+       contrast(getComputedStyle(pre.querySelector('code')).color, getComputedStyle(pre).backgroundColor) >= 4.5);
+  }
+
+  /* ── 17. AUTOFORMAT UNDO ON BACKSPACE ────────────────────*/
+  for (const [marker, tag] of [['#','h1'], ['##','h2'], ['-','ul'], ['1.','ol'], ['>','blockquote']]) {
+    dom.previewPane.innerHTML = `<p>${marker}</p>`;
+    caret('p', marker.length);
+    _tryMarkdownShortcut();
+    const became = dom.previewPane.firstElementChild.tagName.toLowerCase() === tag;
+    const e = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true });
+    dom.previewPane.dispatchEvent(e);
+    _flushPreviewSync();
+    ok(`autoformat "${marker}": applies then Backspace reverts it`,
+       became && e.defaultPrevented && dom.previewPane.firstElementChild.tagName.toLowerCase() === 'p'
+       && dom.previewPane.textContent.trim().startsWith(marker),
+       `became=${became} now=${html()}`);
+  }
+  // Typing something else must commit the autoformat
+  dom.previewPane.innerHTML = '<p>#</p>';
+  caret('p', 1);
+  _tryMarkdownShortcut();
+  dom.previewPane.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true }));
+  {
+    const e = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true });
+    dom.previewPane.dispatchEvent(e);
+    ok('autoformat: a later Backspace does NOT revert it',
+       !e.defaultPrevented && dom.previewPane.firstElementChild.tagName.toLowerCase() === 'h1', html());
+  }
+
+  /* ── 18. CLEAR FORMATTING ────────────────────────────────*/
+  await load('Some **bold** and *italic* text.\n');
+  {
+    const r = document.createRange();
+    r.selectNodeContents(dom.previewPane.querySelector('p'));
+    const s2 = sel(); s2.removeAllRanges(); s2.addRange(r);
+    applyFormat('clear');
+    _flushPreviewSync();
+    ok('clear: strips every inline mark', md() === 'Some bold and italic text.', md());
+  }
+  await load('A ==marked== and `code` run.\n');
+  {
+    const r = document.createRange();
+    r.selectNodeContents(dom.previewPane.querySelector('p'));
+    const s2 = sel(); s2.removeAllRanges(); s2.addRange(r);
+    applyFormat('clear');
+    _flushPreviewSync();
+    ok('clear: strips non-standard wrappers too', md() === 'A marked and code run.', md());
+  }
+
+  /* ── 19. SLASH MENU KEEPS THE ACTIVE ROW IN VIEW ─────────*/
+  await openSlash();
+  {
+    const listEl = dom.slashMenuList;
+    for (let i = 0; i < 8; i++) _slashMenuKeydown({ key: 'ArrowDown' });
+    const active = listEl.querySelector('.slash-item.active');
+    const lr = listEl.getBoundingClientRect(), ar = active.getBoundingClientRect();
+    ok('slash: arrow navigation scrolls the active row into view',
+       ar.top >= lr.top - 1 && ar.bottom <= lr.bottom + 1,
+       `item ${Math.round(ar.top)}-${Math.round(ar.bottom)} vs list ${Math.round(lr.top)}-${Math.round(lr.bottom)}`);
+  }
+  _closeSlashMenu();
 
   const failures = R.filter(r => !r.pass);
   return {

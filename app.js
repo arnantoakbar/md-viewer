@@ -50,6 +50,7 @@ let _lastRenderedMarkdown = '';
 let _undoStack = []; // array of markdown strings
 let _undoIndex = -1; // pointer into _undoStack; -1 = empty
 let _previewSyncTimer = null; // debounce handle for DOM → markdown sync
+let _lastAutoformat   = null; // { block, marker } — undone by an immediate Backspace
 
 
 /* ═══════════════════════════════════════════════════════════
@@ -2297,8 +2298,11 @@ function domToMarkdown(el) {
         return '\n```' + lang + '\n' + raw.trimEnd() + '\n```\n\n';
       }
       case 'blockquote': {
-        const inner = ch().trim();
-        return '\n' + inner.split('\n').map(l => '> ' + l).join('\n') + '\n\n';
+        // Collapse runs of blank lines: two <p> children yield '\n\n\n', and
+        // '> \n> \n> ' terminates the quote instead of separating paragraphs
+        // inside it — which is what made Enter appear to start a second quote.
+        const inner = ch().trim().replace(/\n{3,}/g, '\n\n');
+        return '\n' + inner.split('\n').map(l => (l ? '> ' + l : '>')).join('\n') + '\n\n';
       }
       case 'ul': {
         const items = [...node.children].filter(c => c.tagName.toLowerCase() === 'li');
@@ -2593,19 +2597,45 @@ function initInlineEditor() {
     // Slash menu owns the arrows/Enter/Tab/Escape while it is open
     if (_slashMenuKeydown(e)) { e.preventDefault(); return; }
 
-    // Escaping a quote or list.
-    //   Ctrl/Cmd+Enter — always break out, even with text right of the caret.
-    //   Enter          — break out of an empty line inside a quote (the browser
-    //                    already does this for an empty list item, but it keeps
-    //                    nesting empty paragraphs inside a blockquote forever).
-    if (e.key === 'Enter') {
-      const sel   = window.getSelection();
-      const start = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
-      if (start) {
-        const block    = _getContainingBlock(start);
-        const isEmpty  = block && !block.textContent.trim();
-        const inQuote  = !!_findInPreview(start, 'blockquote');
-        if ((meta || (inQuote && isEmpty)) && _escapeBlock()) {
+    // Backspace immediately after an autoformat undoes it, restoring the
+    // literal marker — the standard escape hatch when "# " was meant as text.
+    if (e.key === 'Backspace' && _lastAutoformat) {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && sel.isCollapsed) {
+        const block = _getContainingBlock(sel.getRangeAt(0).startContainer);
+        if (block === _lastAutoformat.block && _caretAtStartOf(block)) {
+          _undoAutoformat();
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+    // Any other key means the autoformat was accepted
+    if (e.key !== 'Backspace') _lastAutoformat = null;
+
+    // Ctrl/Cmd+Enter breaks out of a quote or list from anywhere. Plain Enter
+    // deliberately does NOT: inside a quote it keeps adding lines to that same
+    // quote, and ArrowDown past the end is how you leave (as with code blocks).
+    if (e.key === 'Enter' && meta && _escapeBlock()) {
+      e.preventDefault();
+      return;
+    }
+
+    // ArrowDown at the end of a quote or code block steps out of it, creating
+    // a plain paragraph below when there is nothing after it yet.
+    if (e.key === 'ArrowDown') {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && sel.isCollapsed) {
+        const container = _findInPreview(sel.getRangeAt(0).startContainer, 'blockquote,pre');
+        if (container && _caretAtEndOf(container)) {
+          let next = container.nextElementSibling;
+          if (!next) {
+            next = document.createElement('p');
+            next.appendChild(document.createElement('br'));
+            container.insertAdjacentElement('afterend', next);
+            _syncDomToCodeEditor();
+          }
+          _caretIn(next, false);
           e.preventDefault();
           return;
         }
@@ -3002,6 +3032,9 @@ function _applyFormatToRenderedMode(format) {
 
     // ── Block: fenced code ──
     case 'fenced': _toggleFencedCode(); break;
+
+    // ── Strip every inline format from the selection ──
+    case 'clear': _clearFormatting(); break;
   }
 
   // Sync the (now-modified) DOM back to the markdown code editor
@@ -3090,6 +3123,9 @@ function _renderSlashMenu() {
 
   dom.slashMenuEmpty.classList.toggle('hidden', items.length > 0);
   dom.slashMenu.classList.remove('hidden');
+  // Arrow keys can walk past the visible rows; keep the active one on screen
+  dom.slashMenuList.querySelector('.slash-item.active')
+    ?.scrollIntoView({ block: 'nearest' });
   _positionSlashMenu();
 }
 
@@ -3196,16 +3232,56 @@ function _tryMarkdownShortcut() {
   probe.selectNodeContents(block);
   try { probe.setEnd(range.startContainer, range.startOffset); } catch (_) { return false; }
 
-  const fmt = _MD_PREFIX[probe.toString()];
+  const marker = probe.toString();
+  const fmt    = _MD_PREFIX[marker];
   if (!fmt || block.tagName.toLowerCase() === fmt) return false;
 
-  probe.deleteContents(); // drop the marker chars, caret stays at block start
-  if (fmt === 'ul')      document.execCommand('insertUnorderedList');
-  else if (fmt === 'ol') document.execCommand('insertOrderedList');
-  else                   document.execCommand('formatBlock', false, fmt);
+  probe.deleteContents(); // drop the marker characters
+
+  let newBlock;
+  if (fmt === 'ul' || fmt === 'ol') {
+    _toggleList(fmt);
+    const now = window.getSelection();
+    newBlock = now.rangeCount ? _getContainingBlock(now.getRangeAt(0).startContainer) : null;
+  } else {
+    // Built by hand: execCommand('formatBlock') on a now-empty block leaves a
+    // stray empty <p> sibling behind.
+    newBlock = document.createElement(fmt);
+    while (block.firstChild) newBlock.appendChild(block.firstChild);
+    if (!newBlock.textContent.trim()) newBlock.appendChild(document.createElement('br'));
+    block.replaceWith(newBlock);
+    _caretIn(newBlock, false);
+  }
+
+  // Remembered so an immediate Backspace can restore the literal marker
+  _lastAutoformat = newBlock ? { block: newBlock, marker } : null;
 
   _syncDomToCodeEditor();
   return true;
+}
+
+// Revert the most recent markdown autoformat, putting the typed marker back.
+function _undoAutoformat() {
+  if (!_lastAutoformat) return;
+  const { block, marker } = _lastAutoformat;
+  _lastAutoformat = null;
+  if (!block || !dom.previewPane.contains(block)) return;
+
+  const p = document.createElement('p');
+  p.textContent = marker + ' ' + block.textContent.replace(/^\s+/, '');
+
+  // Drop the list wrapper too when this was its only item
+  const list   = block.closest ? block.closest('ul,ol') : null;
+  const victim = (list && list.children.length === 1) ? list : block;
+  victim.replaceWith(p);
+
+  const r = document.createRange();
+  r.setStart(p.firstChild, marker.length + 1);
+  r.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(r);
+  dom.previewPane.focus();
+  _syncDomToCodeEditor();
 }
 
 // Walk up from `node` to find the first ancestor matching `selector`
@@ -3258,6 +3334,42 @@ function _unwrap(el) {
   el.replaceWith(frag);
 }
 
+// Collapse the caret inside `node`, at its start or end.
+function _caretIn(node, atEnd = false) {
+  const r = document.createRange();
+  r.selectNodeContents(node);
+  r.collapse(!atEnd);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(r);
+  dom.previewPane.focus();
+}
+
+// True when nothing but whitespace follows the caret inside `el`.
+function _caretAtEndOf(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  try {
+    const cur = sel.getRangeAt(0);
+    const rest = document.createRange();
+    rest.selectNodeContents(el);
+    rest.setStart(cur.endContainer, cur.endOffset);
+    return !rest.toString().trim();
+  } catch (_) { return false; }
+}
+
+// True when nothing but whitespace precedes the caret inside `el`.
+function _caretAtStartOf(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  try {
+    const cur = sel.getRangeAt(0);
+    const before = document.createRange();
+    before.selectNodeContents(el);
+    before.setEnd(cur.startContainer, cur.startOffset);
+    return !before.toString().trim();
+  } catch (_) { return false; }
+}
+
 // Select `node`'s full contents so the caret lands sensibly after a transform.
 function _selectContents(node) {
   const r = document.createRange();
@@ -3277,20 +3389,42 @@ function _toggleList(type) {
   if (!sel || !sel.rangeCount) return;
   const start    = sel.getRangeAt(0).startContainer;
   const existing = _findInPreview(start, 'ul,ol');
-  const block    = _getContainingBlock(start);
 
-  if (!existing && block && !block.textContent.trim()) {
-    const list = document.createElement(type);
-    const li   = document.createElement('li');
-    li.appendChild(document.createElement('br'));
-    list.appendChild(li);
-    block.replaceWith(list);
-    const r = document.createRange();
-    r.setStart(li, 0); r.collapse(true);
-    sel.removeAllRanges(); sel.addRange(r);
+  // Already a list: same type unwraps it, the other type converts it.
+  if (existing) {
+    if (existing.tagName.toLowerCase() === type) {
+      const frag = document.createDocumentFragment();
+      for (const li of [...existing.children]) {
+        const p = document.createElement('p');
+        while (li.firstChild) p.appendChild(li.firstChild);
+        if (!p.textContent.trim()) p.appendChild(document.createElement('br'));
+        frag.appendChild(p);
+      }
+      const first = frag.firstChild;
+      existing.replaceWith(frag);
+      if (first) _caretIn(first, true);
+    } else {
+      const list = document.createElement(type);
+      while (existing.firstChild) list.appendChild(existing.firstChild);
+      existing.replaceWith(list);
+      _caretIn(list.querySelector('li') || list, true);
+    }
     return;
   }
-  document.execCommand(type === 'ul' ? 'insertUnorderedList' : 'insertOrderedList');
+
+  // Build the list by hand rather than calling execCommand('insertUnorderedList').
+  // That command nests the new <ul> INSIDE the paragraph (<p><ul><li>…), and the
+  // invalid markup collapsed into the preceding paragraph on round-trip — which
+  // is why a list started under a sentence swallowed that sentence.
+  const block = _getContainingBlock(start);
+  if (!block || block.closest('pre')) return;
+  const list = document.createElement(type);
+  const li   = document.createElement('li');
+  while (block.firstChild) li.appendChild(block.firstChild);
+  if (!li.textContent.trim()) li.appendChild(document.createElement('br'));
+  list.appendChild(li);
+  block.replaceWith(list);
+  _caretIn(li, true);
 }
 
 // Leave the enclosing list or quote and start a plain paragraph after it.
@@ -3346,6 +3480,18 @@ function _toggleInlineElement(tag) {
     return; // range spanned block boundaries — leave the document untouched
   }
   _selectContents(el);
+}
+
+// Strip inline formatting from the selection by replacing it with its own
+// plain text. execCommand('removeFormat') only knows the standard tags and
+// leaves <mark>/<sub>/<sup>/<code> wrappers behind.
+function _clearFormatting() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+  if (_findInPreview(sel.getRangeAt(0).commonAncestorContainer, 'pre')) return;
+  const text = sel.toString();
+  if (!text) return;
+  document.execCommand('insertText', false, text);
 }
 
 // Toggle a fenced code block. Inside one → back to a paragraph; otherwise wrap
