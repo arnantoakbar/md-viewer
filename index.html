@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,700;12..96,800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=540ab39e">
 </head>
 <body>
 
@@ -104,7 +104,7 @@
           </svg>
           Fork
         </a>
-        <button id="btn-open-new" class="btn btn-ghost btn-sm">Change Folder</button>
+        <button id="btn-open-new" class="btn btn-ghost btn-sm" title="Pick a different folder to browse">Change Folder</button>
       </div>
     </header>
 
@@ -184,13 +184,14 @@
 
           <div class="toolbar-center">
             <div class="view-toggle" role="group" aria-label="View mode">
-              <button id="btn-view-rendered" class="view-toggle-btn active" data-view="rendered">Rendered</button>
-              <button id="btn-view-code" class="view-toggle-btn" data-view="code">Code</button>
+              <button id="btn-view-rendered" class="view-toggle-btn active" data-view="rendered" title="Rendered — edit the formatted article directly">Rendered</button>
+              <button id="btn-view-split" class="view-toggle-btn" data-view="split" title="Split — rendered article beside its Markdown source">Split</button>
+              <button id="btn-view-code" class="view-toggle-btn" data-view="code" title="Code — edit the raw Markdown source">Code</button>
             </div>
           </div>
 
           <div class="toolbar-right">
-            <button id="btn-edit-inline" class="icon-btn hidden" title="Toggle inline editing (⌘E)">
+            <button id="btn-edit-inline" class="icon-btn" style="display:none" title="Toggle live edit mode — rendered preview + code editor (⌘E)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -208,6 +209,13 @@
                 <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
               </svg>
               Save
+            </button>
+            <button id="btn-export-pdf" class="icon-btn hidden" title="Export as PDF (Ctrl+P / ⌘P)">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/>
+              </svg>
             </button>
             <button id="btn-fullscreen" class="icon-btn" title="Toggle fullscreen (F11)">
               <svg id="icon-fullscreen" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -246,36 +254,41 @@
           </button>
         </div>
 
-        <!-- RENDERED PREVIEW -->
-        <div id="preview-pane" class="preview-pane">
-          <div id="preview-empty" class="preview-empty">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-              <polyline points="10 9 9 9 8 9"/>
-            </svg>
-            <p>Select a Markdown file to preview</p>
-          </div>
-        </div>
+        <!-- CONTENT AREA — wraps preview + code pane so split flex only affects them -->
+        <div id="content-area" class="content-area">
 
-        <!-- CODE EDITOR -->
-        <div id="code-pane" class="code-pane hidden">
-          <div id="line-numbers" class="line-numbers" aria-hidden="true"></div>
-          <div class="code-editor-wrap">
-            <!-- Syntax-highlighted layer behind the transparent textarea -->
-            <div id="code-highlight" class="code-highlight" aria-hidden="true"></div>
-            <textarea
-              id="code-editor"
-              class="code-editor"
-              spellcheck="false"
-              autocomplete="off"
-              autocorrect="off"
-              autocapitalize="off"
-              wrap="off"
-              placeholder="Select a file to edit..."></textarea>
+          <!-- RENDERED PREVIEW -->
+          <div id="preview-pane" class="preview-pane">
+            <div id="preview-empty" class="preview-empty">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+              <p>Select a Markdown file to preview</p>
+            </div>
           </div>
-        </div>
+
+          <!-- CODE EDITOR -->
+          <div id="code-pane" class="code-pane hidden">
+            <div id="line-numbers" class="line-numbers" aria-hidden="true"></div>
+            <div class="code-editor-wrap">
+              <!-- Syntax-highlighted layer behind the transparent textarea -->
+              <div id="code-highlight" class="code-highlight" aria-hidden="true"></div>
+              <textarea
+                id="code-editor"
+                class="code-editor"
+                spellcheck="false"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                wrap="off"
+                placeholder="Select a file to edit..."></textarea>
+            </div>
+          </div>
+
+        </div><!-- /content-area -->
 
       </section>
 
@@ -361,6 +374,10 @@
             <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>S</kbd></div>
           </div>
           <div class="shortcut-row">
+            <span class="shortcut-desc">Export as PDF</span>
+            <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>P</kbd></div>
+          </div>
+          <div class="shortcut-row">
             <span class="shortcut-desc">Undo file deletion</span>
             <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd></div>
           </div>
@@ -374,7 +391,7 @@
         <div class="shortcut-group">
           <div class="shortcut-group-label">View</div>
           <div class="shortcut-row">
-            <span class="shortcut-desc">Toggle inline editing</span>
+            <span class="shortcut-desc">Toggle split view</span>
             <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>E</kbd></div>
           </div>
           <div class="shortcut-row">
@@ -384,6 +401,48 @@
           <div class="shortcut-row">
             <span class="shortcut-desc">Toggle fullscreen</span>
             <div class="shortcut-keys"><kbd>F11</kbd></div>
+          </div>
+        </div>
+
+        <!-- Editing (rendered view) -->
+        <div class="shortcut-group">
+          <div class="shortcut-group-label">Editing</div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Insert a block</span>
+            <div class="shortcut-keys"><kbd>/</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Heading, list, quote</span>
+            <div class="shortcut-keys"><kbd>#</kbd><span>/</span><kbd>-</kbd><span>/</span><kbd>&gt;</kbd><span>+</span><kbd>Space</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Undo that autoformat</span>
+            <div class="shortcut-keys"><kbd>Backspace</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Format selected text</span>
+            <div class="shortcut-keys"><kbd>Select</kbd></div>
+          </div>
+        </div>
+
+        <!-- Blocks -->
+        <div class="shortcut-group">
+          <div class="shortcut-group-label">Blocks</div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">New line in quote / list</span>
+            <div class="shortcut-keys"><kbd>Enter</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Leave quote or code block</span>
+            <div class="shortcut-keys"><kbd>↓</kbd><span>at end</span></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Break out of any block</span>
+            <div class="shortcut-keys"><kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Insert a tab</span>
+            <div class="shortcut-keys"><kbd>Tab</kbd></div>
           </div>
         </div>
 
@@ -449,6 +508,20 @@
     <button class="fmt-btn fmt-highlight-btn" data-format="highlight" title="Highlight (==text==)">Mark</button>
     <button class="fmt-btn" data-format="sub" title="Subscript (~text~)">X<sub>2</sub></button>
     <button class="fmt-btn" data-format="sup" title="Superscript (^text^)">X<sup>2</sup></button>
+    <span class="fmt-sep" aria-hidden="true"></span>
+    <button class="fmt-btn" data-format="clear" title="Clear formatting">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 7V5h11v2"/><path d="M9 5 7 19"/><line x1="5" y1="19" x2="11" y2="19"/>
+        <line x1="15" y1="11" x2="21" y2="17"/><line x1="21" y1="11" x2="15" y2="17"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- SLASH COMMAND MENU (block inserter; body-level so it escapes pane overflow) -->
+  <div id="slash-menu" class="slash-menu hidden" role="listbox" aria-label="Insert block">
+    <div class="slash-menu-head">Insert block</div>
+    <div id="slash-menu-list" class="slash-menu-list"></div>
+    <div id="slash-menu-empty" class="slash-menu-empty hidden">No block matches that name</div>
   </div>
 
   <!-- CDN Libraries -->
@@ -456,6 +529,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=34873e9f"></script>
+  <script src="test-editor.js"></script>
 </body>
 </html>

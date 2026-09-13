@@ -37,6 +37,21 @@ let _pendingDelete = null; // { name, handle, kind, dirHandle, listItemEl, timer
 let _dragState   = null; // { handle, name, kind, srcDirHandle, listItemEl }
 let _pendingMove = null; // { handle, name, kind, srcDirHandle, destDirHandle, destDirName, listItemEl }
 
+// Live edit split-view
+let _liveEditDivider  = null; // the drag handle element between preview and code pane
+let _liveEditCodeW    = null; // code-pane width in split view (px); null = CSS 50% default
+let _liveRenderTimer  = null; // debounce timer for real-time re-render
+
+// Double-Enter fix: tracks last markdown content that was passed to renderMarkdown,
+// so _onPreviewInput can skip re-render when only whitespace changed (e.g. trailing empty paragraph)
+let _lastRenderedMarkdown = '';
+
+// Custom undo stack (browser native undo is destroyed on each innerHTML re-render)
+let _undoStack = []; // array of markdown strings
+let _undoIndex = -1; // pointer into _undoStack; -1 = empty
+let _previewSyncTimer = null; // debounce handle for DOM → markdown sync
+let _lastAutoformat   = null; // { block, marker } — undone by an immediate Backspace
+
 
 /* ═══════════════════════════════════════════════════════════
    DOM REFERENCES
@@ -49,9 +64,11 @@ function cacheDom() {
     'btn-open-folder', 'btn-open-new', 'btn-toggle-panel',
     'btn-up', 'btn-view-rendered', 'btn-view-code',
     'btn-new-file', 'btn-new-folder', 'btn-duplicate', 'btn-edit-inline',
-    'btn-save', 'btn-fullscreen', 'icon-fullscreen',
+    'btn-view-split',
+    'btn-save', 'btn-export-pdf', 'btn-fullscreen', 'icon-fullscreen',
     'format-toolbar',
-    'panel-left', 'resize-handle', 'panel-right',
+    'slash-menu', 'slash-menu-list', 'slash-menu-empty',
+    'panel-left', 'resize-handle', 'panel-right', 'content-area', 'preview-toolbar',
     'file-list', 'file-list-empty', 'current-dir-name',
     'breadcrumb',
     'preview-pane', 'preview-empty', 'code-pane', 'code-editor', 'code-highlight', 'line-numbers',
@@ -110,6 +127,7 @@ function init() {
   wireEvents();
   initResizeHandle();
   initInlineEditor();
+  initTooltips();
   wireKeyboard();
 }
 
@@ -339,8 +357,8 @@ async function navigateToBreadcrumb(depth) {
 }
 
 function clearActiveFile() {
-  // Exit inline edit mode if active — sync to code editor first
-  if (state.isInlineEditing) _exitInlineEditMode(false); // false = skip re-render
+  // Exit split view if active — skip re-render since we're clearing the file
+  if (state.currentView === 'split') _exitInlineEditMode(false);
 
   state.currentFileHandle = null;
   state.isDirty = false;
@@ -350,8 +368,10 @@ function clearActiveFile() {
   dom.btnSave.classList.add('hidden');
   dom.btnDuplicate.classList.add('hidden');
   dom.btnEditInline.classList.add('hidden');
+  dom.btnExportPdf.classList.add('hidden');
 
-  // Reset rendered pane to empty state
+  // Reset rendered pane to empty state (not editable when no file open)
+  dom.previewPane.contentEditable = 'false';
   dom.previewEmpty.classList.remove('hidden');
   dom.previewPane.innerHTML = '';
   dom.previewPane.appendChild(dom.previewEmpty);
@@ -365,8 +385,14 @@ function clearActiveFile() {
   dom.lineNumbers._count    = null;
   dom.lineNumbers._activeLine = null;
 
+  // Reset undo history
+  _undoStack = [];
+  _undoIndex = -1;
+  _lastRenderedMarkdown = '';
+
   // Disable view toggle while nothing is open (re-enabled in openFile)
   dom.btnViewRendered.disabled = true;
+  dom.btnViewSplit.disabled    = true;
   dom.btnViewCode.disabled     = true;
 }
 
@@ -419,16 +445,20 @@ async function createNewFile() {
       dom.dirtyIndicator.classList.add('hidden');
       dom.btnSave.classList.add('hidden');
       dom.btnDuplicate.classList.remove('hidden');
+      dom.btnExportPdf.classList.remove('hidden');
       dom.btnViewRendered.disabled = false;
+      dom.btnViewSplit.disabled    = false;
       dom.btnViewCode.disabled     = false;
       dom.btnEditInline.classList.remove('hidden');
       dom.codeEditor.value = '';
+      _undoStack = [''];
+      _undoIndex = 0;
       await renderMarkdown('');
-      setView('code', false); // go straight to code view; don't persist so next file open stays rendered
+      setView('rendered', false); // stay in rendered view; don't persist
       updateLineNumbers();
       updateCodeHighlight();
-      // Start rename right away so user can set a real name
-      startRename(handle, state.currentDirHandle, item, name);
+      // Preview pane is now contenteditable — focus it so user can start typing immediately
+      dom.previewPane.focus();
     }
   } catch (err) {
     showToast('Could not create file: ' + err.message, 'error');
@@ -908,11 +938,17 @@ async function openFile(handle, name, listItemEl) {
     dom.dirtyIndicator.classList.add('hidden');
     dom.btnSave.classList.add('hidden');
     dom.btnDuplicate.classList.remove('hidden');
+    dom.btnExportPdf.classList.remove('hidden');
     dom.btnViewRendered.disabled = false;
+    dom.btnViewSplit.disabled    = false;
     dom.btnViewCode.disabled     = false;
     dom.btnEditInline.classList.remove('hidden');
     dom.codeEditor.value = content;
     dom.lineNumbers._count = null; // force rebuild on next updateLineNumbers()
+
+    // Seed the undo stack with the file's initial content
+    _undoStack = [content];
+    _undoIndex = 0;
 
     await renderMarkdown(content);
     setView('rendered'); // always open existing files in rendered view
@@ -924,7 +960,7 @@ async function openFile(handle, name, listItemEl) {
   }
 }
 
-async function renderMarkdown(content) {
+async function renderMarkdown(content, { preserveScroll = false } = {}) {
   marked.setOptions({
     breaks: true,
     gfm: true,
@@ -956,13 +992,20 @@ async function renderMarkdown(content) {
     block.closest('pre').dataset.lang = lang;
   });
 
-  // Render Mermaid diagrams
+  // Render Mermaid diagrams (store original source for domToMarkdown round-trip)
   await renderMermaidBlocks();
 
   // Stamp each block with its source line so scroll sync can find it
   annotateRenderedBlocks(content);
 
-  dom.previewPane.scrollTop = 0;
+  // Apply contenteditable state and mark non-editable islands (code blocks, mermaid)
+  _setupEditablePane();
+
+  // Track the last markdown that was actually rendered (used by _onPreviewInput to
+  // skip pointless re-renders when content didn't meaningfully change, e.g. after Enter)
+  _lastRenderedMarkdown = content;
+
+  if (!preserveScroll) dom.previewPane.scrollTop = 0;
 }
 
 async function renderMermaidBlocks() {
@@ -977,6 +1020,7 @@ async function renderMermaidBlocks() {
       const wrapper = document.createElement('div');
       wrapper.className = 'mermaid-diagram';
       wrapper.innerHTML = svg;
+      wrapper.dataset.mermaidSource = definition; // stored for domToMarkdown round-trip
       pre.replaceWith(wrapper);
     } catch (err) {
       const errDiv = document.createElement('div');
@@ -1207,34 +1251,93 @@ function updateLineNumbers() {
    VIEW TOGGLE
 ═══════════════════════════════════════════════════════════ */
 function setView(view, save = true) {
-  // Exit inline edit mode when switching views (syncs content first)
-  if (state.isInlineEditing) _exitInlineEditMode(false);
+  const prev = state.currentView;
 
-  if (view === state.currentView && state.currentFileHandle) {
-    // Same view — just ensure line numbers are up to date
+  // Pending contenteditable edits must land before anything reads codeEditor.value
+  _flushPreviewSync();
+
+  // Nothing to do if already in this exact view
+  if (view === prev && state.currentFileHandle) {
     if (view === 'code') updateLineNumbers();
     return;
   }
 
-  // Capture scroll position from the CURRENTLY VISIBLE pane before switching
+  // Capture scroll position from the currently visible pane before switching
   const syncLine = state.currentFileHandle
-    ? (state.currentView === 'rendered' ? getRenderedScrollLine() : getCodeScrollLine())
+    ? (prev === 'rendered' || prev === 'split' ? getRenderedScrollLine() : getCodeScrollLine())
     : 1;
 
+  // ── Tear down split-view state when leaving it ──────────────────────────
+  if (prev === 'split') {
+    state.isInlineEditing = false;
+    clearTimeout(_liveRenderTimer);
+    dom.contentArea.classList.remove('live-edit-mode');
+    dom.btnEditInline.classList.remove('edit-active');
+    // codePane / previewPane visibility is set correctly below
+  }
+
   state.currentView = view;
+
   const isRendered = view === 'rendered';
+  const isSplit    = view === 'split';
+  const isCode     = view === 'code';
 
-  dom.previewPane.classList.toggle('hidden', !isRendered);
-  dom.codePane.classList.toggle('hidden',    isRendered);
-  dom.btnViewRendered.classList.toggle('active',  isRendered);
-  dom.btnViewCode.classList.toggle('active',     !isRendered);
+  // ── Pane visibility ─────────────────────────────────────────────────────
+  if (isSplit) {
+    dom.previewPane.classList.remove('hidden');
+    dom.codePane.classList.remove('hidden');
+  } else {
+    dom.previewPane.classList.toggle('hidden', !isRendered);
+    dom.codePane.classList.toggle('hidden',    !isCode);
+  }
 
+  // ── Toggle button active state ───────────────────────────────────────────
+  dom.btnViewRendered.classList.toggle('active', isRendered);
+  dom.btnViewSplit.classList.toggle('active',    isSplit);
+  dom.btnViewCode.classList.toggle('active',     isCode);
+
+  // ── ContentEditable (preview is editable in rendered + split) ───────────
+  if (state.currentFileHandle) {
+    dom.previewPane.contentEditable = (isRendered || isSplit) ? 'true' : 'false';
+  }
+
+  // ── Enter split-view ─────────────────────────────────────────────────────
+  if (isSplit) {
+    state.isInlineEditing = true;
+    if (_liveEditCodeW) dom.contentArea.style.setProperty('--live-code-w', _liveEditCodeW + 'px');
+    dom.contentArea.classList.add('live-edit-mode');
+    dom.btnEditInline.classList.add('edit-active');
+
+    // Create the drag divider once
+    if (!_liveEditDivider) {
+      _liveEditDivider = document.createElement('div');
+      _liveEditDivider.className = 'live-edit-divider';
+      dom.previewPane.insertAdjacentElement('afterend', _liveEditDivider);
+      _initLiveEditResize();
+    }
+
+    if (state.currentFileHandle) {
+      updateLineNumbers();
+      updateCodeHighlight(); // was skipped while the code pane was hidden
+      // Re-render so the preview is fresh after any code-view edits
+      if (prev === 'code') {
+        renderMarkdown(dom.codeEditor.value);
+      }
+      // Deliberately no focus() call: stealing focus into the code editor
+      // collapsed any selection in the rendered pane and dismissed the
+      // format toolbar the moment split view opened.
+    }
+    if (save) savePreferences();
+    return;
+  }
+
+  // ── Content sync for rendered / code ────────────────────────────────────
   if (state.currentFileHandle) {
     if (isRendered) {
-      // Re-render from textarea so unsaved edits appear live; scroll after mermaid settles
       renderMarkdown(dom.codeEditor.value).then(() => scrollPreviewToLine(syncLine));
     } else {
       updateLineNumbers();
+      updateCodeHighlight(); // was skipped while the code pane was hidden
       requestAnimationFrame(() => scrollCodeToLine(syncLine));
     }
   }
@@ -1257,17 +1360,48 @@ function _markDirty() {
 
 function onEditorInput() {
   if (!state.currentFileHandle) return;
-  if (!state.isDirty) {
-    state.isDirty = true;
-    dom.dirtyIndicator.classList.remove('hidden');
-    dom.btnSave.classList.remove('hidden');
-  }
+  _markDirty();
   updateLineNumbers();
   updateCodeHighlight();
+
+  // Live preview: re-render markdown while the split-view edit mode is active
+  if (state.currentView === 'split') {
+    clearTimeout(_liveRenderTimer);
+    _liveRenderTimer = setTimeout(() => {
+      renderMarkdown(dom.codeEditor.value);
+    }, 250);
+  }
+}
+
+// Export the current file as a PDF via the browser's native print-to-PDF.
+// Reuses the exact same preview-pane DOM + CSS the user sees, so the
+// output matches the viewer's theme/styles exactly (see @media print in style.css).
+async function exportToPDF() {
+  if (!state.currentFileHandle) return;
+  _flushPreviewSync();
+
+  // preview-pane only re-renders live in 'rendered'/'split' views; in 'code'
+  // view it can be stale, so refresh it from the editor before printing.
+  if (state.currentView === 'code') {
+    await renderMarkdown(dom.codeEditor.value, { preserveScroll: true });
+  }
+
+  const baseName = state.currentFileHandle.name.replace(/\.md$/i, '');
+  const originalTitle = document.title;
+  document.title = baseName; // browsers suggest document.title as the PDF filename
+
+  const restoreTitle = () => {
+    document.title = originalTitle;
+    window.removeEventListener('afterprint', restoreTitle);
+  };
+  window.addEventListener('afterprint', restoreTitle);
+
+  window.print();
 }
 
 async function saveFile() {
   if (!state.currentFileHandle) return;
+  _flushPreviewSync(); // land any debounced contenteditable edits before writing
   if (!state.isDirty) {
     showToast('No unsaved changes', 'info', 2000);
     return;
@@ -1562,11 +1696,15 @@ async function openFileFromSearch(result, query) {
     dom.fileNameDisplay.textContent = result.name;
     dom.dirtyIndicator.classList.add('hidden');
     dom.btnSave.classList.add('hidden');
+    dom.btnExportPdf.classList.remove('hidden');
     dom.btnViewRendered.disabled = false;
+    dom.btnViewSplit.disabled    = false;
     dom.btnViewCode.disabled     = false;
     dom.btnEditInline.classList.remove('hidden');
     dom.codeEditor.value = content;
     dom.lineNumbers._count = null;
+    _undoStack = [content];
+    _undoIndex = 0;
 
     await renderMarkdown(content);
     setView('rendered');
@@ -1829,7 +1967,8 @@ function savePreferences() {
   try {
     const prefs = {
       panelWidth:       state.panelWidth,
-      currentView:      state.currentView,
+      // 'split' can't be restored after page reload (no file handle) — save as 'rendered'
+      currentView:      state.currentView === 'split' ? 'rendered' : state.currentView,
       isPanelCollapsed: state.isPanelCollapsed,
     };
     localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
@@ -1845,6 +1984,7 @@ function loadPreferences() {
     if (typeof prefs.panelWidth === 'number' && prefs.panelWidth >= 180 && prefs.panelWidth <= 500) {
       state.panelWidth = prefs.panelWidth;
     }
+    // 'split' can't be meaningfully restored (no file handle after reload), so default to 'rendered'
     if (prefs.currentView === 'rendered' || prefs.currentView === 'code') {
       state.currentView = prefs.currentView;
     }
@@ -1859,14 +1999,17 @@ function applyPreferences() {
   dom.panelLeft.classList.toggle('collapsed', state.isPanelCollapsed);
   setPanelWidth(state.isPanelCollapsed ? 0 : state.panelWidth, state.panelWidth);
 
-  // Apply view (but don't render — no file loaded yet)
-  dom.btnViewRendered.classList.toggle('active', state.currentView === 'rendered');
-  dom.btnViewCode.classList.toggle('active', state.currentView === 'code');
-  dom.previewPane.classList.toggle('hidden', state.currentView !== 'rendered');
-  dom.codePane.classList.toggle('hidden', state.currentView !== 'code');
+  // Apply view (but don't render — no file loaded yet; split is impossible without a file)
+  const v = state.currentView;
+  dom.btnViewRendered.classList.toggle('active', v === 'rendered');
+  dom.btnViewSplit.classList.toggle('active',    v === 'split');
+  dom.btnViewCode.classList.toggle('active',     v === 'code');
+  dom.previewPane.classList.toggle('hidden', v !== 'rendered');
+  dom.codePane.classList.toggle('hidden',    v !== 'code');
 
   // No file is open yet — disable the view toggle until a file is selected
   dom.btnViewRendered.disabled = true;
+  dom.btnViewSplit.disabled    = true;
   dom.btnViewCode.disabled     = true;
 }
 
@@ -1886,8 +2029,16 @@ function wireKeyboard() {
       return;
     }
 
+    // Export as PDF: Ctrl/Cmd + P (only when a file is open, otherwise let the
+    // browser print the page as normal)
+    if (meta && e.key === 'p' && state.currentFileHandle) {
+      e.preventDefault();
+      exportToPDF();
+      return;
+    }
+
     // Undo pending delete: Ctrl/Cmd + Z (skip when inline editor is focused — let browser undo text)
-    if (meta && e.key === 'z' && _pendingDelete && !state.isInlineEditing) {
+    if (meta && e.key === 'z' && _pendingDelete && !dom.previewPane.contains(document.activeElement)) {
       e.preventDefault();
       const undoBtn = dom.toastContainer.querySelector('.toast-undo-btn');
       if (undoBtn) undoBtn.click();
@@ -1926,8 +2077,13 @@ function wireKeyboard() {
       }
     }
 
-    // Match navigation (only when nav bar is active and focus is not in the editor)
-    if (state.matchNav.active && document.activeElement !== dom.codeEditor) {
+    // Match navigation (only when nav bar is active and focus is not in an editor).
+    // previewPane.contains() covers the pane itself — it IS the activeElement when
+    // the contenteditable has focus. Without it, Enter and the arrow keys jumped
+    // between search matches instead of editing text.
+    const inEditor = document.activeElement === dom.codeEditor ||
+                     dom.previewPane.contains(document.activeElement);
+    if (state.matchNav.active && !inEditor) {
       // Enter / Shift+Enter — next / prev match
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -1945,11 +2101,11 @@ function wireKeyboard() {
       }
     }
 
-    // Toggle inline edit mode: Ctrl/Cmd + E
+    // Toggle split view: Ctrl/Cmd + E
     if (meta && e.key === 'e') {
       e.preventDefault();
       if (!appVisible || !state.currentFileHandle) return;
-      if (state.currentView === 'rendered') toggleInlineEdit();
+      toggleInlineEdit(); // toggles between split ↔ rendered (or code → split)
       return;
     }
 
@@ -1975,8 +2131,8 @@ function wireKeyboard() {
         closeHelp();
         return;
       }
-      if (state.isInlineEditing) {
-        _exitInlineEditMode(true);
+      if (state.currentView === 'split') {
+        setView('rendered');
         return;
       }
       if (!dom.moveModal.classList.contains('hidden')) {
@@ -2079,10 +2235,320 @@ function _registerMarkedExtensions() {
 
 
 /* ═══════════════════════════════════════════════════════════
-   INLINE EDITOR (rendered-view editing mode)
+   DOM → MARKDOWN CONVERSION
+   Used to derive the markdown source from the rendered HTML
+   when the user types directly in the contenteditable preview.
 ═══════════════════════════════════════════════════════════ */
 
+// Text of an editable code block. Typing Enter inside one produces <br> or
+// <div>, and textContent renders both as nothing — so multi-line edits were
+// silently flattened onto a single line.
+function _preText(el) {
+  let out = '';
+  for (const n of el.childNodes) {
+    if (n.nodeType === Node.TEXT_NODE) out += n.textContent;
+    else if (n.nodeName === 'BR') out += '\n';
+    else {
+      if (/^(DIV|P)$/.test(n.nodeName) && out && !out.endsWith('\n')) out += '\n';
+      out += _preText(n);
+    }
+  }
+  return out;
+}
+
+function domToMarkdown(el) {
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const tag = node.tagName.toLowerCase();
+    const ch  = () => [...node.childNodes].map(walk).join('');
+
+    // Non-editable islands carry their original source in data attributes
+    if (node.classList.contains('mermaid-diagram')) {
+      return '\n```mermaid\n' + (node.dataset.mermaidSource || '').trim() + '\n```\n\n';
+    }
+    if (node.classList.contains('mermaid-error')) return '';
+
+    switch (tag) {
+      case 'h1': return '\n# '      + ch().trim() + '\n\n';
+      case 'h2': return '\n## '     + ch().trim() + '\n\n';
+      case 'h3': return '\n### '    + ch().trim() + '\n\n';
+      case 'h4': return '\n#### '   + ch().trim() + '\n\n';
+      case 'h5': return '\n##### '  + ch().trim() + '\n\n';
+      case 'h6': return '\n###### ' + ch().trim() + '\n\n';
+      case 'p': {
+        const c = ch().trim();
+        return c ? '\n' + c + '\n\n' : '\n\n';
+      }
+      case 'strong': case 'b':                   return '**' + ch() + '**';
+      case 'em':     case 'i':                   return '*'  + ch() + '*';
+      case 's': case 'del': case 'strike':        return '~~' + ch() + '~~';
+      case 'u':                                   return ch(); // underline has no markdown equiv
+      case 'mark':               return '==' + ch() + '==';
+      case 'sub':                return '~'  + ch() + '~';
+      case 'sup':                return '^'  + ch() + '^';
+      case 'code': {
+        if (node.closest('pre')) return node.textContent; // inside pre: raw text only
+        return '`' + node.textContent + '`';
+      }
+      case 'pre': {
+        const code = node.querySelector('code');
+        const raw  = _preText(code || node);
+        const lang = (code?.className?.match(/language-(\w+)/)?.[1] ?? '').replace('language-','');
+        return '\n```' + lang + '\n' + raw.trimEnd() + '\n```\n\n';
+      }
+      case 'blockquote': {
+        // Collapse runs of blank lines: two <p> children yield '\n\n\n', and
+        // '> \n> \n> ' terminates the quote instead of separating paragraphs
+        // inside it — which is what made Enter appear to start a second quote.
+        const inner = ch().trim().replace(/\n{3,}/g, '\n\n');
+        return '\n' + inner.split('\n').map(l => (l ? '> ' + l : '>')).join('\n') + '\n\n';
+      }
+      case 'ul': {
+        const items = [...node.children].filter(c => c.tagName.toLowerCase() === 'li');
+        return '\n' + items.map(li =>
+          '- ' + [...li.childNodes].map(walk).join('').trim()
+        ).join('\n') + '\n\n';
+      }
+      case 'ol': {
+        const items = [...node.children].filter(c => c.tagName.toLowerCase() === 'li');
+        return '\n' + items.map((li, i) =>
+          (i + 1) + '. ' + [...li.childNodes].map(walk).join('').trim()
+        ).join('\n') + '\n\n';
+      }
+      case 'li':  return ch(); // handled by ul/ol
+      case 'hr':  return '\n---\n\n';
+      case 'br':  return '\n';
+      // contenteditable drops <div> wrappers in on Enter and on paste. Treat
+      // them as blocks — falling through to default() swallowed the line break
+      // entirely and collapsed separate paragraphs into one.
+      case 'div': return node === el ? ch() : '\n' + ch().trim() + '\n\n';
+      case 'a': {
+        const href  = node.getAttribute('href') || '';
+        const title = node.getAttribute('title');
+        return '[' + ch() + '](' + href + (title ? ` "${title}"` : '') + ')';
+      }
+      case 'img': return '![' + (node.alt || '') + '](' + (node.getAttribute('src') || '') + ')';
+      case 'table': {
+        const rows = [...node.querySelectorAll('tr')];
+        if (!rows.length) return '';
+        const hdrs = [...rows[0].querySelectorAll('th,td')].map(
+          c => [...c.childNodes].map(walk).join('').trim()
+        );
+        const sep  = hdrs.map(() => '---');
+        const body = rows.slice(1).map(r =>
+          [...r.querySelectorAll('td')].map(c => [...c.childNodes].map(walk).join('').trim())
+        );
+        const toRow = cells => '| ' + cells.join(' | ') + ' |';
+        return '\n' + [toRow(hdrs), toRow(sep), ...body.map(toRow)].join('\n') + '\n\n';
+      }
+      default: return ch();
+    }
+  }
+  return walk(el).replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').trim() + '\n';
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   CURSOR SAVE / RESTORE (for after live re-render)
+═══════════════════════════════════════════════════════════ */
+
+// Return the plain text content from the cursor to the end of `el`.
+// Used as an anchor to restore cursor position after innerHTML is replaced.
+function _saveCursorAfter(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  try {
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.startContainer)) return null;
+    const after = document.createRange();
+    after.setStart(range.startContainer, range.startOffset);
+    after.setEnd(el, el.childNodes.length);
+    return after.toString();
+  } catch (_) { return null; }
+}
+
+// Restore cursor to the position where `textAfter` starts in the new DOM content.
+// Collapses whitespace for comparison so structural newlines don't throw off the offset.
+function _restoreCursorAfter(el, textAfter) {
+  if (textAfter === null) return;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes  = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const fullText = nodes.map(n => n.textContent).join('');
+
+  const norm = s => s.replace(/[\n\r\s]+/g, ' ');
+  const nFull  = norm(fullText);
+  const nAfter = norm(textAfter);
+
+  let targetPos;
+  if (!nAfter.trim()) {
+    targetPos = fullText.length;
+  } else {
+    const nTarget = nFull.length - nAfter.length;
+    if (nTarget < 0) { targetPos = fullText.length; }
+    else {
+      // Map the normalised offset back to actual text position
+      let nPos = 0, aPos = 0;
+      for (let i = 0; i < fullText.length; i++) {
+        if (nPos >= nTarget) break;
+        nPos += norm(fullText[i]).length;
+        aPos = i + 1;
+      }
+      targetPos = aPos;
+    }
+  }
+
+  let rem = targetPos;
+  for (const node of nodes) {
+    if (rem <= node.textContent.length) {
+      try {
+        const r = document.createRange();
+        r.setStart(node, rem);
+        r.collapse(true);
+        const s = window.getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+      } catch (_) {}
+      return;
+    }
+    rem -= node.textContent.length;
+  }
+  // Fallback: end of content
+  const last = nodes[nodes.length - 1];
+  if (last) {
+    try {
+      const r = document.createRange();
+      r.setStart(last, last.textContent.length);
+      r.collapse(true);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(r);
+    } catch (_) {}
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   PREVIEW PANE INPUT HANDLER
+   Called whenever the user types in the contenteditable preview.
+═══════════════════════════════════════════════════════════ */
+
+function _onPreviewInput() {
+  if (!state.currentFileHandle) return;
+  // The DOM is the source of truth while typing — never re-render here, that
+  // is what caused cursor jumps and double-Enter. Only the dirty dot is
+  // immediate; the markdown sync is debounced because domToMarkdown walks the
+  // whole document and re-highlighting the source is O(document) per keystroke.
+  _markDirty();
+  _updateSlashMenu(); // immediate: the menu tracks the caret, not the debounce
+  clearTimeout(_previewSyncTimer);
+  // In split view the code pane is on screen, so the user is watching it —
+  // sync almost immediately. Alone in rendered view nobody sees it; stay lazy.
+  const delay = state.currentView === 'split' ? 50 : 200;
+  _previewSyncTimer = setTimeout(_flushPreviewSync, delay);
+}
+
+// DOM → markdown → code editor. Debounced while typing, so anything that READS
+// codeEditor.value (save, export, view switch) must flush first or it sees
+// content that is up to 200ms stale.
+function _flushPreviewSync() {
+  clearTimeout(_previewSyncTimer);
+  _previewSyncTimer = null;
+  if (!state.currentFileHandle) return;
+  dom.codeEditor.value = domToMarkdown(dom.previewPane);
+  // Gutter + syntax layer are invisible in rendered view — refreshed by setView
+  // when the code pane comes back.
+  if (!dom.codePane.classList.contains('hidden')) {
+    updateLineNumbers();
+    updateCodeHighlight();
+  }
+}
+
+// Apply contenteditable state and mark non-editable islands.
+// Called at the end of renderMarkdown when a file is open in rendered or split view.
+function _setupEditablePane() {
+  const editable = !!(state.currentFileHandle &&
+    (state.currentView === 'rendered' || state.currentView === 'split'));
+  dom.previewPane.contentEditable = editable ? 'true' : 'false';
+  if (!editable) return;
+  // Mermaid output is generated SVG — editing it by hand is meaningless and the
+  // source round-trips from data-mermaid-source. Code blocks stay editable:
+  // locking them made it impossible to place a caret inside one, which is why
+  // the code-block button could never toggle itself off.
+  dom.previewPane.querySelectorAll('.mermaid-diagram, .mermaid-error').forEach(el => {
+    el.contentEditable = 'false';
+  });
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   SPLIT-VIEW TOGGLE (⌘E)
+═══════════════════════════════════════════════════════════ */
+
+// Styled tooltips for icon-only controls. Hijacks [title] so the browser's
+// slow, unstyled native tooltip never appears, and mirrors the text into
+// aria-label so screen readers keep the same description.
+function initTooltips() {
+  const tip = document.createElement('div');
+  tip.className = 'tip';
+  tip.setAttribute('role', 'tooltip');
+  document.body.appendChild(tip);
+
+  let showTimer = null;
+  const hide = () => { clearTimeout(showTimer); tip.classList.remove('tip-show'); };
+
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest('[title], [data-tip]');
+    if (!el) return;
+
+    // Move title → data-tip once, so the native bubble never fires again
+    const native = el.getAttribute('title');
+    if (native) {
+      el.dataset.tip = native;
+      if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', native);
+      el.removeAttribute('title');
+    }
+    const text = el.dataset.tip;
+    if (!text) return;
+
+    clearTimeout(showTimer);
+    showTimer = setTimeout(() => {
+      tip.textContent = text;
+      tip.classList.add('tip-show');
+      const r = el.getBoundingClientRect();
+      const t = tip.getBoundingClientRect();
+      let top = r.bottom + 8;
+      if (top + t.height > window.innerHeight - 8) top = r.top - t.height - 8;
+      tip.style.top  = Math.max(8, top) + 'px';
+      tip.style.left = Math.min(Math.max(8, r.left + r.width / 2 - t.width / 2),
+                                window.innerWidth - t.width - 8) + 'px';
+    }, 180);
+  });
+
+  document.addEventListener('mouseout', e => {
+    if (e.target.closest('[data-tip]')) hide();
+  });
+  document.addEventListener('mousedown', hide);
+  window.addEventListener('blur', hide);
+}
+
 function initInlineEditor() {
+  // Enter must split into <p>, not Chrome's default <div> — <div> has no
+  // markdown equivalent and used to swallow the paragraph break outright.
+  try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (_) {}
+  // Force tag-based output (<b>, not <span style="font-weight:bold">) — inline
+  // styles have no markdown equivalent and domToMarkdown would drop them.
+  try { document.execCommand('styleWithCSS', false, false); } catch (_) {}
+
+  // Paste as plain text. Rich HTML from a webpage carries inline styles and
+  // classes that domToMarkdown can't represent, so it round-trips to garbage.
+  dom.previewPane.addEventListener('paste', e => {
+    if (!state.currentFileHandle) return;
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, text);
+  });
+
   // Format toolbar: use mousedown (not click) so selection isn't lost before we apply the format
   dom.formatToolbar.addEventListener('mousedown', e => {
     const btn = e.target.closest('.fmt-btn');
@@ -2096,90 +2562,297 @@ function initInlineEditor() {
 
   // Hide format toolbar when preview pane scrolls
   dom.previewPane.addEventListener('scroll', () => hideFormatToolbar(), { passive: true });
+
+  // Live input: user types in the contenteditable preview → sync to code editor + debounce render
+  dom.previewPane.addEventListener('input', _onPreviewInput);
+
+  // Click in rendered preview while split view is open → sync code editor to that line
+  dom.previewPane.addEventListener('click', e => {
+    if (!state.currentFileHandle || state.currentView !== 'split') return;
+    if (e.target.closest('a, button, .mermaid-diagram, pre, #preview-empty')) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return; // selection drag, not a simple click
+    _syncCodeEditorToClick(e.clientX, e.clientY);
+  });
+
+  // Keyboard shortcuts inside the contenteditable preview pane
+  // Slash menu: click to choose. mousedown so the caret/selection survives.
+  dom.slashMenu.addEventListener('mousedown', e => {
+    const btn = e.target.closest('.slash-item');
+    if (!btn) return;
+    e.preventDefault();
+    _runSlashCommand(btn.dataset.fmt);
+  });
+
+  // Close the menu on an outside click or when the pane scrolls away
+  document.addEventListener('mousedown', e => {
+    if (_slash && !dom.slashMenu.contains(e.target)) _closeSlashMenu();
+  });
+  dom.previewPane.addEventListener('scroll', () => _slash && _closeSlashMenu(), { passive: true });
+
+  dom.previewPane.addEventListener('keydown', e => {
+    if (!state.currentFileHandle) return;
+    const meta = e.ctrlKey || e.metaKey;
+
+    // Slash menu owns the arrows/Enter/Tab/Escape while it is open
+    if (_slashMenuKeydown(e)) { e.preventDefault(); return; }
+
+    // Backspace immediately after an autoformat undoes it, restoring the
+    // literal marker — the standard escape hatch when "# " was meant as text.
+    if (e.key === 'Backspace' && _lastAutoformat) {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && sel.isCollapsed) {
+        const block = _getContainingBlock(sel.getRangeAt(0).startContainer);
+        if (block === _lastAutoformat.block && _caretAtStartOf(block)) {
+          _undoAutoformat();
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+    // Any other key means the autoformat was accepted
+    if (e.key !== 'Backspace') _lastAutoformat = null;
+
+    // Ctrl/Cmd+Enter breaks out of a quote or list from anywhere. Plain Enter
+    // deliberately does NOT: inside a quote it keeps adding lines to that same
+    // quote, and ArrowDown past the end is how you leave (as with code blocks).
+    if (e.key === 'Enter' && meta && _escapeBlock()) {
+      e.preventDefault();
+      return;
+    }
+
+    // ArrowDown at the end of a quote or code block steps out of it, creating
+    // a plain paragraph below when there is nothing after it yet.
+    if (e.key === 'ArrowDown') {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && sel.isCollapsed) {
+        const container = _findInPreview(sel.getRangeAt(0).startContainer, 'blockquote,pre');
+        if (container && _caretAtEndOf(container)) {
+          let next = container.nextElementSibling;
+          if (!next) {
+            next = document.createElement('p');
+            next.appendChild(document.createElement('br'));
+            container.insertAdjacentElement('afterend', next);
+            _syncDomToCodeEditor();
+          }
+          _caretIn(next, false);
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+
+    // Tab → insert a real tab character instead of moving focus
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      document.execCommand('insertText', false, '\t');
+      return;
+    }
+
+    // Medium-style shortcut: "## " at the start of a block becomes a heading
+    if (e.key === ' ' && _tryMarkdownShortcut()) {
+      e.preventDefault();
+      return;
+    }
+
+  });
+
+  // Double-click in split view → scroll code editor to the clicked source line
+  dom.previewPane.addEventListener('dblclick', e => {
+    if (!state.currentFileHandle || state.currentView !== 'split') return;
+    if (e.target.closest('a, .mermaid-diagram, pre, #preview-empty')) return;
+    // Deliberately no codeEditor.focus() here: moving focus out of the pane
+    // collapses the selection, which dismissed the format toolbar on every
+    // double-click in split view.
+    _syncCodeEditorToClick(e.clientX, e.clientY);
+  });
 }
 
 function toggleInlineEdit() {
-  if (state.isInlineEditing) {
-    _exitInlineEditMode(true);
-  } else {
-    _enterInlineEditMode();
+  if (state.currentView === 'split') {
+    setView('rendered');
+  } else if (state.currentFileHandle) {
+    setView('split');
   }
 }
 
-function _enterInlineEditMode() {
+// Toggle the side-by-side split view (⌘E or edit button).
+// Delegates to setView so all state is managed in one place.
+function _enterInlineEditMode(clickX, clickY) {
   if (!state.currentFileHandle) return;
-  if (state.currentView !== 'rendered') return;
-  if (state.isInlineEditing) return;
+  setView('split');
+  if (clickX !== undefined && clickY !== undefined) {
+    _syncCodeEditorToClick(clickX, clickY);
+  }
+}
 
-  state.isInlineEditing = true;
-  dom.btnEditInline.classList.add('edit-active');
-  dom.previewPane.classList.add('inline-edit-active');
+// Initialise the horizontal resize handle between preview (left) and code pane (right).
+function _initLiveEditResize() {
+  let startX, startW;
+  _liveEditDivider.addEventListener('mousedown', e => {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = dom.codePane.offsetWidth;
+    _liveEditDivider.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
 
-  // Build the editable div with raw markdown source
-  const editEl = document.createElement('div');
-  editEl.id = 'inline-editor';
-  editEl.className = 'inline-editor';
-  editEl.contentEditable = 'plaintext-only';
-  editEl.spellcheck = false;
-  editEl.setAttribute('autocorrect', 'off');
-  editEl.setAttribute('autocapitalize', 'off');
-  editEl.setAttribute('data-gramm', 'false');        // disable Grammarly
-  editEl.setAttribute('data-gramm_editor', 'false'); // disable Grammarly
-  editEl.textContent = dom.codeEditor.value;
-
-  // Clear pane and inject editable content
-  dom.previewPane.innerHTML = '';
-  dom.previewPane.appendChild(editEl);
-  editEl.focus();
-
-  // Place cursor at start
-  const range = document.createRange();
-  const sel   = window.getSelection();
-  range.setStart(editEl, 0);
-  range.collapse(true);
-  sel.removeAllRanges();
-  sel.addRange(range);
-
-  // Sync edits → code editor (mark dirty, update highlight)
-  editEl.addEventListener('input', () => {
-    const raw = editEl.innerText.replace(/ /g, ' ');
-    dom.codeEditor.value = raw;
-    _markDirty();
-    updateCodeHighlight();
-    // Update line numbers so Save knows current line count
-    dom.lineNumbers._count = null;
-    updateLineNumbers();
+    const onMove = mv => {
+      const delta  = startX - mv.clientX; // drag left → wider code pane
+      const panelW = dom.contentArea.offsetWidth;
+      // Leave the preview its 320px prose floor + the 5px divider, so dragging
+      // can never squeeze the rendered pane below a readable measure.
+      const maxW   = Math.max(240, panelW - 320 - 5);
+      const newW   = Math.min(Math.max(240, startW + delta), maxW);
+      _liveEditCodeW = newW;
+      dom.contentArea.style.setProperty('--live-code-w', newW + 'px');
+    };
+    const onUp = () => {
+      _liveEditDivider.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   });
+}
 
-  // Blur → exit edit mode and re-render
-  // Use a small delay so format-toolbar mousedown fires first
-  editEl.addEventListener('blur', () => {
-    setTimeout(() => {
-      if (state.isInlineEditing) _exitInlineEditMode(true);
-    }, 120);
+// Scroll the code editor so the line nearest the clicked rendered element is visible.
+function _syncCodeEditorToClick(x, y) {
+  requestAnimationFrame(() => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return;
+    const block = el.closest('[data-source-line]');
+    if (!block) return;
+    const lineIdx = parseInt(block.dataset.sourceLine, 10) - 1; // 0-based
+    if (isNaN(lineIdx) || lineIdx < 0) return;
+
+    const lines = dom.codeEditor.value.split('\n');
+    if (lineIdx >= lines.length) return;
+
+    // Move caret to the start of that line
+    const charOffset = lines.slice(0, lineIdx).reduce((acc, l) => acc + l.length + 1, 0);
+    dom.codeEditor.setSelectionRange(charOffset, charOffset);
+
+    // Scroll so the target line is vertically centred in the textarea
+    const lineH = 13 * 1.75; // matches font-size × line-height in .code-editor
+    dom.codeEditor.scrollTop = Math.max(0, lineIdx * lineH - dom.codePane.offsetHeight / 2);
   });
 }
 
 function _exitInlineEditMode(doRender = true) {
-  if (!state.isInlineEditing) return;
-  state.isInlineEditing = false;
-
-  // Sync final text before destroying the element
-  const editEl = dom.previewPane.querySelector('#inline-editor');
-  if (editEl) {
-    const raw = editEl.innerText.replace(/ /g, ' ');
-    dom.codeEditor.value = raw;
-    updateCodeHighlight();
-    dom.lineNumbers._count = null;
-    updateLineNumbers();
-  }
-
-  dom.btnEditInline.classList.remove('edit-active');
-  dom.previewPane.classList.remove('inline-edit-active');
+  if (state.currentView !== 'split') return;
 
   if (doRender) {
-    renderMarkdown(dom.codeEditor.value);
+    // setView('rendered') handles the full teardown + re-render
+    setView('rendered');
+  } else {
+    // Lightweight teardown without re-render (used when clearing the active file)
+    state.isInlineEditing = false;
+    state.currentView = 'rendered';
+    clearTimeout(_liveRenderTimer);
+    dom.contentArea.classList.remove('live-edit-mode');
+    dom.codePane.classList.add('hidden');
+    dom.previewPane.classList.remove('hidden');
+    dom.btnEditInline.classList.remove('edit-active');
+    dom.btnViewRendered.classList.add('active');
+    dom.btnViewSplit.classList.remove('active');
   }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CUSTOM UNDO / REDO
+   Browser-native undo is destroyed on every innerHTML re-render.
+   We maintain our own markdown snapshot stack instead.
+═══════════════════════════════════════════════════════════ */
+
+// Push a markdown snapshot onto the undo stack (truncates any redo future).
+function _pushUndo(markdown) {
+  // Don't record duplicates
+  if (_undoStack[_undoIndex] === markdown) return;
+  // Truncate redo history beyond current position
+  _undoStack = _undoStack.slice(0, _undoIndex + 1);
+  _undoStack.push(markdown);
+  // Cap stack at 200 entries
+  if (_undoStack.length > 200) { _undoStack.shift(); } else { _undoIndex++; }
+}
+
+// Restore the previous snapshot.
+function _undo() {
+  if (_undoIndex <= 0) return; // nothing left to undo
+  _undoIndex--;
+  _applyUndoSnapshot(_undoStack[_undoIndex]);
+}
+
+// Re-apply a snapshot that was undone.
+function _redo() {
+  if (_undoIndex >= _undoStack.length - 1) return;
+  _undoIndex++;
+  _applyUndoSnapshot(_undoStack[_undoIndex]);
+}
+
+function _applyUndoSnapshot(markdown) {
+  dom.codeEditor.value = markdown;
+  _markDirty();
+  updateLineNumbers();
+  updateCodeHighlight();
+  const scrollTop = dom.previewPane.scrollTop;
+  renderMarkdown(markdown, { preserveScroll: true }).then(() => {
+    dom.previewPane.scrollTop = scrollTop;
+    if (state.currentView === 'rendered' || state.currentView === 'split') {
+      dom.previewPane.focus();
+    }
+  });
+}
+
+
+// Extract plain-text markdown from the inline editor, normalising special whitespace.
+function _getInlineContent(editEl) {
+  return (editEl.innerText || editEl.textContent)
+    .replace(/\u00A0/g, ' ')
+    .replace(/\u2028/g, '\n')
+    .replace(/\u2029/g, '\n');
+}
+
+// Place caret at charOffset within a contenteditable element.
+function _placeCursorAt(el, charOffset) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let rem = charOffset;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (rem <= node.textContent.length) {
+      try {
+        const r = document.createRange();
+        r.setStart(node, rem);
+        r.collapse(true);
+        const s = window.getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+      } catch (_) {}
+      return;
+    }
+    rem -= node.textContent.length;
+  }
+  // Fallback: end of element
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(false);
+  const s = window.getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+}
+
+// Character offset of (targetNode, targetOffset) within a contenteditable.
+function _getCharOffset(el, targetNode, targetOffset) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let pos = 0;
+  while (walker.nextNode()) {
+    if (walker.currentNode === targetNode) return pos + targetOffset;
+    pos += walker.currentNode.textContent.length;
+  }
+  return pos;
 }
 
 
@@ -2222,26 +2895,65 @@ function showFormatToolbar(selectionRect) {
   const tb = dom.formatToolbar;
   tb.classList.remove('hidden');
 
-  // Force layout to measure toolbar dimensions
-  const tbRect = tb.getBoundingClientRect();
-  const tbW = tbRect.width || 420; // fallback estimate
-  const tbH = tbRect.height || 38;
+  // Detect and highlight which formats are already active on the selection
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount) {
+    const active = _detectActiveFormats(sel.getRangeAt(0));
+    tb.querySelectorAll('.fmt-btn').forEach(btn => {
+      btn.classList.toggle('fmt-active', active.has(btn.dataset.format));
+    });
+  }
 
-  const GAP = 10; // gap between toolbar bottom and selection top
+  // Position: measure toolbar after it's visible
+  const tbRect = tb.getBoundingClientRect();
+  const tbW = tbRect.width || 400;
+  const tbH = tbRect.height || 36;
+  const GAP = 10;
 
   let top  = selectionRect.top - tbH - GAP;
   let left = selectionRect.left + selectionRect.width / 2;
 
-  // Don't go off-screen top
   if (top < 8) top = selectionRect.bottom + GAP;
 
-  // Clamp horizontally
   const margin = 8;
-  const halfTb = tbW / 2;
-  left = Math.min(window.innerWidth - halfTb - margin, Math.max(halfTb + margin, left));
+  left = Math.min(window.innerWidth - tbW / 2 - margin, Math.max(tbW / 2 + margin, left));
 
   tb.style.top  = top + 'px';
   tb.style.left = left + 'px';
+}
+
+// Detect which formats are currently active for the given selection range.
+// Walks up the rendered DOM from the selection anchor — works in both plain rendered view
+// and live-edit split view (where the preview pane still shows rendered HTML).
+function _detectActiveFormats(range) {
+  const active = new Set();
+
+  let el = range.startContainer.nodeType === Node.TEXT_NODE
+    ? range.startContainer.parentElement
+    : range.startContainer;
+
+  while (el && el !== dom.previewPane) {
+    const tag = el.tagName?.toLowerCase();
+    if (tag === 'strong' || tag === 'b')            active.add('bold');
+    if (tag === 'em'     || tag === 'i')            active.add('italic');
+    if (tag === 's' || tag === 'del' || tag === 'strike') active.add('strikethrough');
+    if (tag === 'blockquote')                        active.add('blockquote');
+    if (tag === 'code' && !el.closest('pre'))        active.add('code');
+    if (tag === 'pre')                               active.add('fenced');
+    if (tag === 'h1')                                active.add('h1');
+    if (tag === 'h2')                                active.add('h2');
+    if (tag === 'h3')                                active.add('h3');
+    if (tag === 'mark')                              active.add('highlight');
+    if (tag === 'sub')                               active.add('sub');
+    if (tag === 'sup')                               active.add('sup');
+    if (tag === 'li') {
+      if (el.closest('ul')) active.add('ul');
+      if (el.closest('ol')) active.add('ol');
+    }
+    el = el.parentElement;
+  }
+
+  return active;
 }
 
 function hideFormatToolbar() {
@@ -2271,89 +2983,553 @@ function getFormatMarkers(format) {
   return map[format] || { prefix: '', suffix: '', block: false };
 }
 
+// ── Format dispatcher ─────────────────────────────────────────────────────────
+// All formatting in rendered/split mode goes through execCommand or direct DOM
+// manipulation, then syncs DOM → markdown → code editor.
+// This approach is reliable because:
+//   • It works at the cursor position — no "find text in source" guessing
+//   • execCommand auto-detects existing formatting and toggles it off
+//   • No re-render means no cursor jump
 function applyFormat(format) {
-  const markers = getFormatMarkers(format);
-  if (state.isInlineEditing) {
-    _applyFormatToEditMode(markers);
-  } else {
-    _applyFormatToRenderedMode(markers);
-  }
+  _applyFormatToRenderedMode(format);
   hideFormatToolbar();
 }
 
-// ── Edit mode: apply formatting directly in the contenteditable ─────────────
-function _applyFormatToEditMode({ prefix, suffix, block }) {
+// Block formats act on whichever block holds the caret, so they do not need a
+// selection. Inline formats have nothing to wrap without one.
+const _BLOCK_FORMATS = new Set(['h1', 'h2', 'h3', 'blockquote', 'ul', 'ol', 'fenced']);
+
+function _applyFormatToRenderedMode(format) {
   const sel = window.getSelection();
   if (!sel || !sel.rangeCount) return;
+  if (!_BLOCK_FORMATS.has(format) && !sel.toString().trim()) return;
 
-  const selectedText = sel.toString();
-  if (!selectedText) return;
+  // Keep focus (and selection) on the preview pane — the format buttons use
+  // mousedown + preventDefault so focus never actually left.
+  switch (format) {
+    // ── Inline: native execCommand handles toggle automatically ──
+    case 'bold':          document.execCommand('bold');         break;
+    case 'italic':        document.execCommand('italic');       break;
+    case 'strikethrough': document.execCommand('strikeThrough'); break;
 
-  let replacement;
-  if (block) {
-    replacement = selectedText.split('\n').map(l => prefix + l).join('\n');
-  } else {
-    replacement = prefix + selectedText + suffix;
+    // ── Block: headings ──
+    case 'h1': _toggleHeading('h1'); break;
+    case 'h2': _toggleHeading('h2'); break;
+    case 'h3': _toggleHeading('h3'); break;
+
+    // ── Block: blockquote ──
+    case 'blockquote': _toggleBlockquoteDom(); break;
+
+    // ── Block: lists ──
+    case 'ul': _toggleList('ul'); break;
+    case 'ol': _toggleList('ol'); break;
+
+    // ── Inline: no execCommand equivalent — use insertHTML toggle ──
+    case 'code':      _toggleInlineElement('code');  break;
+    case 'highlight': _toggleInlineElement('mark');  break;
+    case 'sub':       _toggleInlineElement('sub');   break;
+    case 'sup':       _toggleInlineElement('sup');   break;
+
+    // ── Block: fenced code ──
+    case 'fenced': _toggleFencedCode(); break;
+
+    // ── Strip every inline format from the selection ──
+    case 'clear': _clearFormatting(); break;
   }
 
-  // Insert text in place of the selection
+  // Sync the (now-modified) DOM back to the markdown code editor
+  _syncDomToCodeEditor();
+}
+
+// ── Format helpers ────────────────────────────────────────────────────────────
+
+// Sync DOM → markdown → code editor (no re-render of the preview)
+function _syncDomToCodeEditor() {
+  _markDirty();
+  _flushPreviewSync();
+  _pushUndo(dom.codeEditor.value);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLASH COMMAND MENU
+   Type "/" in the rendered editor to insert or convert a block,
+   so structure never requires a trip to the code view.
+═══════════════════════════════════════════════════════════ */
+
+const _ICON = {
+  // feather-style, matching the format toolbar: 24-box, 2.5 stroke, round caps
+  text:    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>',
+  quote:   '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/></svg>',
+  ul:      '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>',
+  ol:      '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4" stroke-width="2"/><path d="M4 10h2" stroke-width="2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1" stroke-width="2"/></svg>',
+  code:    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+  divider: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12"/></svg>',
+};
+
+const _SLASH_COMMANDS = [
+  { fmt: 'p',          label: 'Text',          hint: 'Plain paragraph',  icon: _ICON.text,    keys: 'text paragraph plain body' },
+  { fmt: 'h1',         label: 'Heading 1',     hint: 'Large title',      icon: 'H1',          keys: 'heading title h1 large' },
+  { fmt: 'h2',         label: 'Heading 2',     hint: 'Section title',    icon: 'H2',          keys: 'heading subtitle h2 section' },
+  { fmt: 'h3',         label: 'Heading 3',     hint: 'Sub-section',      icon: 'H3',          keys: 'heading h3 subsection' },
+  { fmt: 'ul',         label: 'Bulleted list', hint: 'Unordered list',   icon: _ICON.ul,      keys: 'bullet list unordered ul item' },
+  { fmt: 'ol',         label: 'Numbered list', hint: 'Ordered list',     icon: _ICON.ol,      keys: 'number list ordered ol steps' },
+  { fmt: 'blockquote', label: 'Quote',         hint: 'Callout or cite',  icon: _ICON.quote,   keys: 'quote blockquote callout cite' },
+  { fmt: 'fenced',     label: 'Code block',    hint: 'Fenced code',      icon: _ICON.code,    keys: 'code block fenced snippet pre' },
+  { fmt: 'hr',         label: 'Divider',       hint: 'Horizontal rule',  icon: _ICON.divider, keys: 'divider rule separator hr line' },
+];
+
+// null when closed; otherwise the text node + offsets of the live "/query"
+let _slash = null;
+let _slashIndex = 0;
+
+function _slashMatches(query) {
+  if (!query) return _SLASH_COMMANDS;
+  const q = query.toLowerCase();
+  return _SLASH_COMMANDS.filter(c => c.keys.includes(q) || c.label.toLowerCase().includes(q));
+}
+
+// Called on every input. Opens, filters, or closes the menu based on whether the
+// caret still sits just after a "/query" token.
+function _updateSlashMenu() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || !sel.isCollapsed) return _closeSlashMenu();
+
   const range = sel.getRangeAt(0);
-  range.deleteContents();
-  const node = document.createTextNode(replacement);
-  range.insertNode(node);
+  const node  = range.startContainer;
+  if (node.nodeType !== Node.TEXT_NODE) return _closeSlashMenu();
+  if (_findInPreview(node, 'pre')) return _closeSlashMenu(); // literal "/" in code
 
-  // Move cursor to end of inserted text
-  range.setStartAfter(node);
-  range.collapse(true);
-  sel.removeAllRanges();
-  sel.addRange(range);
+  // "/" must open a token: at block start, or after whitespace
+  const before = node.textContent.slice(0, range.startOffset);
+  const m = before.match(/(?:^|\s)\/([A-Za-z0-9]*)$/);
+  if (!m) return _closeSlashMenu();
 
-  // Sync to code editor
-  const editEl = dom.previewPane.querySelector('#inline-editor');
-  if (editEl) {
-    const raw = editEl.innerText.replace(/ /g, ' ');
-    dom.codeEditor.value = raw;
-    _markDirty();
-    updateCodeHighlight();
+  _slash = { node, start: range.startOffset - m[1].length - 1, end: range.startOffset, query: m[1] };
+  _slashIndex = 0;
+  _renderSlashMenu();
+}
+
+function _renderSlashMenu() {
+  const items = _slashMatches(_slash.query);
+  _slashIndex = Math.min(_slashIndex, Math.max(0, items.length - 1));
+
+  dom.slashMenuList.innerHTML = items.map((c, i) => `
+    <button type="button" class="slash-item${i === _slashIndex ? ' active' : ''}"
+            role="option" aria-selected="${i === _slashIndex}" data-fmt="${c.fmt}">
+      <span class="slash-item-icon">${c.icon}</span>
+      <span><span class="slash-item-label">${c.label}</span>
+      <span class="slash-item-hint">${c.hint}</span></span>
+    </button>`).join('');
+
+  dom.slashMenuEmpty.classList.toggle('hidden', items.length > 0);
+  dom.slashMenu.classList.remove('hidden');
+  // Arrow keys can walk past the visible rows; keep the active one on screen
+  dom.slashMenuList.querySelector('.slash-item.active')
+    ?.scrollIntoView({ block: 'nearest' });
+  _positionSlashMenu();
+}
+
+function _positionSlashMenu() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  let rect = sel.getRangeAt(0).getBoundingClientRect();
+  if (!rect || (!rect.width && !rect.height)) {
+    const block = _getContainingBlock(sel.getRangeAt(0).startContainer);
+    if (block) rect = block.getBoundingClientRect();
+  }
+  if (!rect) return;
+
+  const menu = dom.slashMenu.getBoundingClientRect();
+  const GAP  = 8;
+  // Flip above the caret when the menu would run off the bottom
+  let top = rect.bottom + GAP;
+  if (top + menu.height > window.innerHeight - 8) top = Math.max(8, rect.top - menu.height - GAP);
+  const left = Math.min(Math.max(8, rect.left), window.innerWidth - menu.width - 8);
+
+  dom.slashMenu.style.top  = top + 'px';
+  dom.slashMenu.style.left = left + 'px';
+}
+
+function _closeSlashMenu() {
+  _slash = null;
+  dom.slashMenu.classList.add('hidden');
+}
+
+// Remove the typed "/query", then apply the chosen block format.
+function _runSlashCommand(fmt) {
+  if (!_slash) return;
+  const { node, start, end } = _slash;
+  _closeSlashMenu();
+
+  try { node.deleteData(start, end - start); } catch (_) { return; }
+
+  const block = _getContainingBlock(node);
+  const r = document.createRange();
+  if (block && !block.textContent) {
+    // Deleting the token emptied the block. An empty text node has no rendered
+    // caret position, so Chrome relocates the selection into the PREVIOUS block
+    // and formats that one instead — a <br> gives the caret somewhere to live.
+    block.innerHTML = '<br>';
+    r.setStart(block, 0);
+  } else {
+    r.setStart(node, start);
+  }
+  r.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(r);
+  if (fmt === 'hr') {
+    const hr = document.createElement('hr');
+    const p  = document.createElement('p');
+    p.appendChild(document.createElement('br'));
+    block ? block.replaceWith(hr, p) : dom.previewPane.appendChild(hr);
+    _selectContents(p);
+  } else if (fmt === 'p') {
+    document.execCommand('formatBlock', false, 'p');
+  } else if (fmt === 'ul' || fmt === 'ol') {
+    _toggleList(fmt);
+  } else if (fmt === 'fenced') {
+    _toggleFencedCode();
+  } else {
+    document.execCommand('formatBlock', false, fmt);
+  }
+
+  dom.previewPane.focus();
+  _syncDomToCodeEditor();
+}
+
+// Arrow / Enter / Escape while the menu is open. Returns true if consumed.
+function _slashMenuKeydown(e) {
+  if (!_slash) return false;
+  const items = _slashMatches(_slash.query);
+
+  if (e.key === 'Escape') { _closeSlashMenu(); return true; }
+  if (!items.length) return false;
+
+  if (e.key === 'ArrowDown') { _slashIndex = (_slashIndex + 1) % items.length;             _renderSlashMenu(); return true; }
+  if (e.key === 'ArrowUp')   { _slashIndex = (_slashIndex - 1 + items.length) % items.length; _renderSlashMenu(); return true; }
+  if (e.key === 'Enter' || e.key === 'Tab') { _runSlashCommand(items[_slashIndex].fmt); return true; }
+  return false;
+}
+
+// Markdown prefixes that convert the current block when followed by a space.
+const _MD_PREFIX = {
+  '#': 'h1', '##': 'h2', '###': 'h3',
+  '>': 'blockquote', '-': 'ul', '*': 'ul', '1.': 'ol',
+};
+
+// Medium-style autoformat. Returns true if the space was consumed applying a
+// format, false to let it type normally.
+function _tryMarkdownShortcut() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
+
+  const range = sel.getRangeAt(0);
+  const block = _getContainingBlock(range.startContainer);
+  if (!block || block.closest('pre')) return false;
+
+  // Text between the block start and the caret — the candidate marker
+  const probe = document.createRange();
+  probe.selectNodeContents(block);
+  try { probe.setEnd(range.startContainer, range.startOffset); } catch (_) { return false; }
+
+  const marker = probe.toString();
+  const fmt    = _MD_PREFIX[marker];
+  if (!fmt || block.tagName.toLowerCase() === fmt) return false;
+
+  probe.deleteContents(); // drop the marker characters
+
+  let newBlock;
+  if (fmt === 'ul' || fmt === 'ol') {
+    _toggleList(fmt);
+    const now = window.getSelection();
+    newBlock = now.rangeCount ? _getContainingBlock(now.getRangeAt(0).startContainer) : null;
+  } else {
+    // Built by hand: execCommand('formatBlock') on a now-empty block leaves a
+    // stray empty <p> sibling behind.
+    newBlock = document.createElement(fmt);
+    while (block.firstChild) newBlock.appendChild(block.firstChild);
+    if (!newBlock.textContent.trim()) newBlock.appendChild(document.createElement('br'));
+    block.replaceWith(newBlock);
+    _caretIn(newBlock, false);
+  }
+
+  // Remembered so an immediate Backspace can restore the literal marker
+  _lastAutoformat = newBlock ? { block: newBlock, marker } : null;
+
+  _syncDomToCodeEditor();
+  return true;
+}
+
+// Revert the most recent markdown autoformat, putting the typed marker back.
+function _undoAutoformat() {
+  if (!_lastAutoformat) return;
+  const { block, marker } = _lastAutoformat;
+  _lastAutoformat = null;
+  if (!block || !dom.previewPane.contains(block)) return;
+
+  const p = document.createElement('p');
+  p.textContent = marker + ' ' + block.textContent.replace(/^\s+/, '');
+
+  // Drop the list wrapper too when this was its only item
+  const list   = block.closest ? block.closest('ul,ol') : null;
+  const victim = (list && list.children.length === 1) ? list : block;
+  victim.replaceWith(p);
+
+  const r = document.createRange();
+  r.setStart(p.firstChild, marker.length + 1);
+  r.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(r);
+  dom.previewPane.focus();
+  _syncDomToCodeEditor();
+}
+
+// Walk up from `node` to find the first ancestor matching `selector`
+// that is still inside the preview pane.
+function _findInPreview(node, selector) {
+  let el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+  while (el && el !== dom.previewPane) {
+    if (el.matches && el.matches(selector)) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+// Return the nearest block-level ancestor of `node` inside the preview pane.
+function _getContainingBlock(node) {
+  return _findInPreview(node, 'p,h1,h2,h3,h4,h5,h6,li,blockquote,pre,div');
+}
+
+// Toggle H1/H2/H3: if already that level, revert to <p>; otherwise apply.
+function _toggleHeading(level) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const block = _getContainingBlock(sel.getRangeAt(0).startContainer);
+  const current = block?.tagName?.toLowerCase();
+  document.execCommand('formatBlock', false, current === level ? 'p' : level);
+}
+
+// Toggle blockquote: unwrap if inside one, wrap if not.
+function _toggleBlockquoteDom() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const bq = _findInPreview(sel.getRangeAt(0).startContainer, 'blockquote');
+  if (bq) {
+    // Unwrap — lift children out of the blockquote
+    const frag = document.createDocumentFragment();
+    while (bq.firstChild) frag.appendChild(bq.firstChild);
+    bq.replaceWith(frag);
+  } else {
+    document.execCommand('formatBlock', false, 'blockquote');
   }
 }
 
-// ── Rendered mode: apply formatting to markdown source, then re-render ───────
-function _applyFormatToRenderedMode({ prefix, suffix, block }) {
+// Toggle an inline wrapper element (code, mark, sub, sup).
+// If the selection's ancestor IS already that element: remove the wrapper.
+// Otherwise: wrap selection in that element via insertHTML.
+// Unwrap `el`, lifting its children into its place. Keeps nested formatting.
+function _unwrap(el) {
+  const frag = document.createDocumentFragment();
+  while (el.firstChild) frag.appendChild(el.firstChild);
+  el.replaceWith(frag);
+}
+
+// Collapse the caret inside `node`, at its start or end.
+function _caretIn(node, atEnd = false) {
+  const r = document.createRange();
+  r.selectNodeContents(node);
+  r.collapse(!atEnd);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(r);
+  dom.previewPane.focus();
+}
+
+// True when nothing but whitespace follows the caret inside `el`.
+function _caretAtEndOf(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  try {
+    const cur = sel.getRangeAt(0);
+    const rest = document.createRange();
+    rest.selectNodeContents(el);
+    rest.setStart(cur.endContainer, cur.endOffset);
+    return !rest.toString().trim();
+  } catch (_) { return false; }
+}
+
+// True when nothing but whitespace precedes the caret inside `el`.
+function _caretAtStartOf(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  try {
+    const cur = sel.getRangeAt(0);
+    const before = document.createRange();
+    before.selectNodeContents(el);
+    before.setEnd(cur.startContainer, cur.startOffset);
+    return !before.toString().trim();
+  } catch (_) { return false; }
+}
+
+// Select `node`'s full contents so the caret lands sensibly after a transform.
+function _selectContents(node) {
+  const r = document.createRange();
+  r.selectNodeContents(node);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+// Turn the current block into a list, or unwrap it.
+//
+// execCommand('insertUnorderedList') on an empty <p> produces <p><ul><li>…
+// — an invalid nest that made the *previous* paragraph look like the first
+// bullet once it round-tripped. Build the list directly in that case.
+function _toggleList(type) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const start    = sel.getRangeAt(0).startContainer;
+  const existing = _findInPreview(start, 'ul,ol');
+
+  // Already a list: same type unwraps it, the other type converts it.
+  if (existing) {
+    if (existing.tagName.toLowerCase() === type) {
+      const frag = document.createDocumentFragment();
+      for (const li of [...existing.children]) {
+        const p = document.createElement('p');
+        while (li.firstChild) p.appendChild(li.firstChild);
+        if (!p.textContent.trim()) p.appendChild(document.createElement('br'));
+        frag.appendChild(p);
+      }
+      const first = frag.firstChild;
+      existing.replaceWith(frag);
+      if (first) _caretIn(first, true);
+    } else {
+      const list = document.createElement(type);
+      while (existing.firstChild) list.appendChild(existing.firstChild);
+      existing.replaceWith(list);
+      _caretIn(list.querySelector('li') || list, true);
+    }
+    return;
+  }
+
+  // Build the list by hand rather than calling execCommand('insertUnorderedList').
+  // That command nests the new <ul> INSIDE the paragraph (<p><ul><li>…), and the
+  // invalid markup collapsed into the preceding paragraph on round-trip — which
+  // is why a list started under a sentence swallowed that sentence.
+  const block = _getContainingBlock(start);
+  if (!block || block.closest('pre')) return;
+  const list = document.createElement(type);
+  const li   = document.createElement('li');
+  while (block.firstChild) li.appendChild(block.firstChild);
+  if (!li.textContent.trim()) li.appendChild(document.createElement('br'));
+  list.appendChild(li);
+  block.replaceWith(list);
+  _caretIn(li, true);
+}
+
+// Leave the enclosing list or quote and start a plain paragraph after it.
+// Enter alone only escapes an empty item; Ctrl/Cmd+Enter escapes from anywhere,
+// which is the only way out when there is still text to the right of the caret.
+function _escapeBlock() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  const start     = sel.getRangeAt(0).startContainer;
+  const container = _findInPreview(start, 'blockquote,ul,ol');
+  if (!container) return false;
+
+  const block = _getContainingBlock(start);
+  const p = document.createElement('p');
+  p.appendChild(document.createElement('br'));
+  container.insertAdjacentElement('afterend', p);
+
+  // Drop whatever empty shell we were sitting in
+  if (block && block !== container && !block.textContent.trim()) block.remove();
+  if (!container.textContent.trim()) container.remove();
+
+  const r = document.createRange();
+  r.setStart(p, 0); r.collapse(true);
+  sel.removeAllRanges(); sel.addRange(r);
+  dom.previewPane.focus();
+  _syncDomToCodeEditor();
+  return true;
+}
+
+// Toggle an inline wrapper (code, mark, sub, sup).
+//
+// The old version rebuilt the selection from range.toString() via insertHTML,
+// which threw away every nested element — applying <mark> over bold text
+// silently deleted the <strong>. extractContents() moves the real nodes, so
+// formats compose instead of overwriting each other.
+function _toggleInlineElement(tag) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  const existing = _findInPreview(range.commonAncestorContainer, tag);
+
+  if (existing) {
+    _unwrap(existing);          // toggle OFF, nested markup survives
+    return;
+  }
+  if (range.collapsed) return;
+
+  const el = document.createElement(tag);
+  try {
+    el.appendChild(range.extractContents()); // moves nodes, preserves nesting
+    range.insertNode(el);
+  } catch (_) {
+    return; // range spanned block boundaries — leave the document untouched
+  }
+  _selectContents(el);
+}
+
+// Strip inline formatting from the selection by replacing it with its own
+// plain text. execCommand('removeFormat') only knows the standard tags and
+// leaves <mark>/<sub>/<sup>/<code> wrappers behind.
+function _clearFormatting() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+  if (_findInPreview(sel.getRangeAt(0).commonAncestorContainer, 'pre')) return;
+  const text = sel.toString();
+  if (!text) return;
+  document.execCommand('insertText', false, text);
+}
+
+// Toggle a fenced code block. Inside one → back to a paragraph; otherwise wrap
+// the selection. Previously this only ever inserted, so pressing the button on
+// an existing code block nested another one inside it.
+function _toggleFencedCode() {
   const sel = window.getSelection();
   if (!sel || !sel.rangeCount) return;
 
-  const selectedText = sel.toString();
-  if (!selectedText.trim()) return;
-
-  const source = dom.codeEditor.value;
-  const lines  = source.split('\n');
-  let newSource;
-
-  if (block) {
-    // Use data-source-line annotations to find which source lines are selected
-    const range = sel.getRangeAt(0);
-    const lineRange = _getSelectionSourceLines(range);
-    if (!lineRange) {
-      showToast('Could not map selection to source. Switch to Code view to format manually.', 'warning', 4000);
-      return;
+  const pre = _findInPreview(sel.getRangeAt(0).commonAncestorContainer, 'pre');
+  if (pre) {
+    // Toggle OFF: each source line becomes its own paragraph
+    const lines = pre.textContent.replace(/\n+$/, '').split('\n');
+    const frag  = document.createDocumentFragment();
+    for (const line of lines.length ? lines : ['']) {
+      const p = document.createElement('p');
+      p.textContent = line;
+      if (!line) p.appendChild(document.createElement('br')); // keep it selectable
+      frag.appendChild(p);
     }
-    const { startLine, endLine } = lineRange;
-    _toggleBlockFormat(lines, prefix, startLine, endLine);
-    newSource = lines.join('\n');
-  } else {
-    // Inline format: search for selected text in source
-    newSource = _applyInlineFormat(source, selectedText, prefix, suffix);
-    if (newSource === null) {
-      showToast('Could not locate selection in source. Switch to Code view to format manually.', 'warning', 4000);
-      return;
-    }
+    const first = frag.firstChild;
+    pre.replaceWith(frag);
+    if (first) _selectContents(first);
+    return;
   }
 
-  dom.codeEditor.value = newSource;
-  _markDirty();
-  updateCodeHighlight();
-  renderMarkdown(newSource);
+  // Toggle ON: pull the selected blocks' text into one code block
+  const range = sel.getRangeAt(0);
+  const text  = range.toString() || '';
+  const preEl = document.createElement('pre');
+  const code  = document.createElement('code');
+  code.textContent = text;
+  preEl.appendChild(code);
+
+  const block = _getContainingBlock(range.startContainer);
+  if (range.collapsed && block) block.replaceWith(preEl); // empty block → code block
+  else { range.deleteContents(); range.insertNode(preEl); }
+  _selectContents(code);
 }
 
 // Find the source line range [startLine, endLine] (0-based) for the current selection.
@@ -2400,34 +3576,57 @@ function _toggleBlockFormat(lines, prefix, startLine, endLine) {
   }
 }
 
-// Find `selectedText` in `source` and wrap it with prefix/suffix. Returns null if not found.
-// Toggles: if already wrapped, removes the markers instead.
+// Find `selectedText` in `source` and wrap/unwrap it with prefix/suffix.
+// Returns null if the selected text can't be found in source.
+//
+// Toggle-off: checks ALL occurrences of selectedText for DIRECT adjacency with
+// the format markers (i.e. the prefix sits immediately before the text and the
+// suffix immediately after). This avoids accidentally consuming markers that
+// belong to earlier/later spans when the source has repeated words.
+//
+// Single-char delimiters (*italic*) are disambiguated from doubled ones (**bold**)
+// by confirming the outer character is not the same.
 function _applyInlineFormat(source, selectedText, prefix, suffix) {
-  const idx = source.indexOf(selectedText);
-  if (idx === -1) return null;
+  if (!selectedText || !prefix) return null;
 
-  // Toggle check: is the selection already wrapped?
-  if (prefix && suffix) {
-    const beforeOk = idx >= prefix.length &&
-      source.slice(idx - prefix.length, idx) === prefix;
-    const afterOk  = source.slice(idx + selectedText.length,
-      idx + selectedText.length + suffix.length) === suffix;
-    if (beforeOk && afterOk) {
-      // Remove markers
-      return (
-        source.slice(0, idx - prefix.length) +
-        selectedText +
-        source.slice(idx + selectedText.length + suffix.length)
-      );
+  // Try every occurrence — pick the first that is directly wrapped
+  let searchFrom = 0;
+  while (searchFrom <= source.length) {
+    const idx = source.indexOf(selectedText, searchFrom);
+    if (idx === -1) break;
+    const end = idx + selectedText.length;
+
+    const preStart = idx - prefix.length;
+    const sufEnd   = end + suffix.length;
+
+    if (preStart >= 0 && sufEnd <= source.length) {
+      const pre = source.slice(preStart, idx);
+      const suf = source.slice(end, sufEnd);
+
+      if (pre === prefix && suf === suffix) {
+        let valid = true;
+        // Single-char marker: confirm it's not part of a doubled one (**bold**, ~~strike~~)
+        if (prefix.length === 1) {
+          const ch     = prefix[0];
+          const before = preStart > 0           ? source[preStart - 1] : '';
+          const after  = sufEnd   < source.length ? source[sufEnd]       : '';
+          valid = (before !== ch && after !== ch);
+        }
+        if (valid) {
+          // Toggle OFF — remove the immediately surrounding markers
+          return source.slice(0, preStart) + selectedText + source.slice(sufEnd);
+        }
+      }
     }
+
+    searchFrom = idx + 1;
   }
 
-  // Wrap
-  return (
-    source.slice(0, idx) +
-    prefix + selectedText + suffix +
-    source.slice(idx + selectedText.length)
-  );
+  // No directly-wrapped occurrence found → Toggle ON at the first occurrence
+  const firstIdx = source.indexOf(selectedText);
+  if (firstIdx === -1) return null;
+  const firstEnd = firstIdx + selectedText.length;
+  return source.slice(0, firstIdx) + prefix + selectedText + suffix + source.slice(firstEnd);
 }
 
 
@@ -2464,8 +3663,10 @@ function wireEvents() {
   dom.btnEditInline.addEventListener('click', toggleInlineEdit);
   dom.btnDuplicate.addEventListener('click', duplicateFile);
   dom.btnViewRendered.addEventListener('click', () => setView('rendered'));
+  dom.btnViewSplit.addEventListener('click', () => setView('split'));
   dom.btnViewCode.addEventListener('click', () => setView('code'));
   dom.btnSave.addEventListener('click', saveFile);
+  dom.btnExportPdf.addEventListener('click', exportToPDF);
   dom.btnFullscreen.addEventListener('click', toggleFullscreen);
 
   // Double-click toolbar filename → rename
