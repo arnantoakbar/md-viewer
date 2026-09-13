@@ -2238,6 +2238,9 @@ kbd {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
     color-adjust: exact !important;
+    /* PDF output cannot keep a blur, so a soft shadow prints as a hard grey
+       slab around the block (visible behind every code block). */
+    box-shadow: none !important;
   }
 
   html, body {
